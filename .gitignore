@@ -1,0 +1,25 @@
+# Build output
+/bin/
+/neurobrau
+
+# Go test/coverage artifacts
+*.test
+*.out
+coverage.*
+
+# Local credentials and environment files (never commit secrets)
+.env
+.env.*
+*.env
+credentials.sh
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS clutter
+.DS_Store
+Thumbs.db
