@@ -19,10 +19,10 @@ and exit codes.
 The Go edition is not a line-by-line translation, and its version numbers are
 independent. **`0.1.0-dev` does not have feature parity with Python 0.3.0.**
 
-## Current status (Go Task 003B — plain interactive chat and history)
+## Current status (Go Task 004A — streaming one-shot prompts)
 
-Working today: non-streaming one-shot prompts and a non-streaming,
-line-oriented **interactive chat** with **OpenAI** (Responses API, the
+Working today: one-shot prompts (optionally **streamed** with `--stream`)
+and a non-streaming, line-oriented **interactive chat** with **OpenAI** (Responses API, the
 default) or a **local Ollama** server, with generation settings, saved
 settings (read only) and conversations saved in the Python edition's
 formats.
@@ -47,6 +47,7 @@ answer. Flags may come before or after the prompt.
 | `--max-output-tokens N` | positive integer | the model's default |
 | `--answer-style STYLE` | `brief`, `normal`, `detailed` | `normal` (no extra instruction) |
 | `--usage` | — | no usage line |
+| `--stream` | — | the answer is printed when it is complete |
 
 - **Reasoning, OpenAI:** a built-in table (from the Python reference) lists
   the confirmed efforts and output limits of known models; dated snapshots
@@ -74,6 +75,41 @@ answer. Flags may come before or after the prompt.
 - One-shot prompts use the flags and built-in defaults only: they neither
   read `settings.json` nor read or write conversation history. (The Python
   edition also applies saved settings to one-shot prompts.)
+
+### Streaming (`--stream`)
+
+```bash
+neurobrau --stream "Explain transformers."
+neurobrau --provider ollama --model qwen3.5:4b --stream --usage "Hello"
+neurobrau "Explain neurons." --stream
+```
+
+The answer is written to stdout piece by piece as it is generated, then a
+final newline. Reasoning/thinking is never printed (Ollama `thinking` and a
+leading `<think>…</think>` block are hidden). Generation settings are the
+same as without `--stream`. One-shot streaming never reads or writes
+history or settings.
+
+| Outcome | stderr | Exit |
+|---|---|---|
+| completed | with `--usage`: `Token usage: …`, and for Ollama `Duration: 2.50 s (load 1.00 s, generation 1.20 s)` | 0 |
+| stopped early (token limit, content filter) | `neurobrau: warning: response incomplete: <reason>.` (+ usage with `--usage`) | 8 |
+| failed, also after part of the answer | `neurobrau: error: …` (partial text stays on stdout) | 1, 3–7 by kind |
+| Ctrl+C | `neurobrau: interrupted` (the connection is closed at once) | 130 |
+| stdout closed by the reader (`\| head`) | nothing | 141 (SIGPIPE) |
+
+- There is no time limit for a whole answer. A stream fails with a
+  timeout (exit 6) only when no data arrives for 300 s (Ollama, including
+  loading the model) or 600 s (OpenAI); time spent writing output does not
+  count.
+- OpenAI: up to 2 SDK retries before the stream starts (connection errors,
+  HTTP 408/409/429/5xx), never after text arrived. If the API rejects the
+  built-in reasoning default before any text, the request is sent once
+  more without it; a rejected `--reasoning-effort` is reported.
+- A stream that ends without its final event is an error (OpenAI: exit 1;
+  Ollama: connection, exit 7).
+- `--stream` without a prompt exits 2: the interactive chat does not stream
+  yet (Task 004B).
 
 ### Interactive chat
 
@@ -210,6 +246,8 @@ file is left unchanged.
 | chat: Ctrl+C at the prompt | `Goodbye.` | 130 |
 | `--version` | `NeuroBräu Go CLI 0.1.0-dev` on stdout | 0 |
 | successful prompt (also a non-streaming answer cut off at the token limit) | answer on stdout; with `--usage`, usage on stderr | 0 |
+| `--stream` answer cut off (token limit, content filter) | partial answer; `neurobrau: warning: response incomplete: …` | 8 |
+| stdout closed by the reader (e.g. `\| head`) | — | 141 (SIGPIPE) |
 | API error, invalid reply, failed/refused/empty response, missing or cloud Ollama model | `neurobrau: error: …` | 1 |
 | invalid arguments, unknown provider, empty prompt, setting the model does not support | `neurobrau: error: …` | 2 |
 | `OPENAI_API_KEY` missing | `neurobrau: error: …` | 3 |
@@ -248,7 +286,8 @@ internal/chat/   plain chat loop, commands, generation settings resolution,
                  /usage report
 internal/session/ active conversation: context, commit, restore, reset,
                  switch/park, cleanup (no UI, no network)
-internal/llm/    provider-neutral types, Provider interface, error kinds
+internal/llm/    provider-neutral types, Provider and StreamingProvider
+                 interfaces, stream events, error kinds (llmtest: test helpers)
 internal/ollama/ Ollama provider over net/http (/api/tags, /api/show, /api/chat)
 internal/openai/ OpenAI provider over the official SDK (Responses API, Models API)
 internal/storage/ Python-compatible JSON files: conversations, usage records,
@@ -268,8 +307,7 @@ the API, the Python fixtures and the optional parity checks.
 
 ## Roadmap (future — not implemented)
 
-1. Streaming output (`--stream`, including exit 8 for an incomplete streamed
-   answer) — Task 004.
+1. Streaming in the interactive chat — Task 004B.
 2. Fullscreen retro TUI with provider/model menus and settings controls
    (F2–F6) — Task 005. The session layer already supports switching and
    parking conversations per provider/model.

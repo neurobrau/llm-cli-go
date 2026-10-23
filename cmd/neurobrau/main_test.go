@@ -201,3 +201,155 @@ func TestCtrlC(t *testing.T) {
 		t.Errorf("canceled exchange saved: %v", files)
 	}
 }
+
+// fakeOllama serves /api/tags with one local model and /api/chat with chat.
+func fakeOllama(t *testing.T, chat http.HandlerFunc) *httptest.Server {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			io.WriteString(w, `{"models":[{"model":"llama3.2:3b","capabilities":["completion"]}]}`)
+		case "/api/chat":
+			chat(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func ollamaChunk(w http.ResponseWriter, text string) {
+	io.WriteString(w, `{"message":{"role":"assistant","content":"`+text+`"},"done":false}`+"\n")
+	w.(http.Flusher).Flush()
+}
+
+// streamCommand runs a one-shot --stream prompt against an Ollama server.
+func streamCommand(t *testing.T, srv *httptest.Server) *exec.Cmd {
+	cmd := exec.Command(os.Args[0], "--provider", "ollama", "--model", "llama3.2:3b", "--stream", "Hi")
+	cmd.Env = append(isolatedEnv(t), runMainEnv+"=1", "OLLAMA_HOST="+srv.URL)
+	return cmd
+}
+
+// readUntil reads r until the text read so far ends with want.
+func readUntil(t *testing.T, r *bufio.Reader, want string) string {
+	t.Helper()
+	var seen strings.Builder
+	for !strings.HasSuffix(seen.String(), want) {
+		b, err := r.ReadByte()
+		if err != nil {
+			t.Fatalf("reading stdout: %v (%q)", err, seen.String())
+		}
+		seen.WriteByte(b)
+	}
+	return seen.String()
+}
+
+// TestStreamIncrementalOutput checks that the executable writes each
+// piece before the answer is complete: the server sends the rest only
+// after the test has read the first piece from the process's stdout.
+func TestStreamIncrementalOutput(t *testing.T) {
+	firstRead := make(chan struct{})
+	srv := fakeOllama(t, func(w http.ResponseWriter, r *http.Request) {
+		ollamaChunk(w, "Hello")
+		<-firstRead
+		ollamaChunk(w, ", world")
+		io.WriteString(w, `{"message":{"content":""},"done":true,"prompt_eval_count":3,"eval_count":2}`+"\n")
+	})
+	cmd := streamCommand(t, srv)
+	cmd.Args = append(cmd.Args, "--usage")
+	stdout, _ := cmd.StdoutPipe()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	out := bufio.NewReader(stdout)
+	readUntil(t, out, "Hello")
+	close(firstRead)
+	rest, _ := io.ReadAll(out)
+	if code := exitCode(t, cmd.Wait()); code != 0 || string(rest) != ", world\n" ||
+		stderr.String() != "Token usage: input=3, output=2, total=5\n" {
+		t.Errorf("code %d, rest %q, stderr %q", code, rest, stderr.String())
+	}
+	home := ""
+	for _, kv := range cmd.Env {
+		if v, ok := strings.CutPrefix(kv, "XDG_STATE_HOME="); ok {
+			home = v
+		}
+	}
+	if _, err := os.Stat(home); err == nil {
+		t.Error("a one-shot stream wrote to the state directory")
+	}
+}
+
+func TestStreamCtrlC(t *testing.T) {
+	closed := make(chan struct{})
+	srv := fakeOllama(t, func(w http.ResponseWriter, r *http.Request) {
+		ollamaChunk(w, "Part")
+		<-r.Context().Done() // stalls until the client closes the connection
+		close(closed)
+	})
+	cmd := streamCommand(t, srv)
+	stdout, _ := cmd.StdoutPipe()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	out := bufio.NewReader(stdout)
+	readUntil(t, out, "Part")
+	cmd.Process.Signal(syscall.SIGINT)
+	rest, _ := io.ReadAll(out)
+	if code := exitCode(t, cmd.Wait()); code != 130 || string(rest) != "\n" || stderr.String() != "neurobrau: interrupted\n" {
+		t.Errorf("code %d, rest %q, stderr %q", code, rest, stderr.String())
+	}
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Error("the connection stayed open")
+	}
+}
+
+// TestStreamBrokenPipe closes the reading end of stdout (like `| head`):
+// the process ends quietly by SIGPIPE, which shells report as exit code
+// 141, and the connection to the server closes.
+func TestStreamBrokenPipe(t *testing.T) {
+	closed := make(chan struct{})
+	srv := fakeOllama(t, func(w http.ResponseWriter, r *http.Request) {
+		for r.Context().Err() == nil {
+			ollamaChunk(w, "more ")
+			time.Sleep(time.Millisecond)
+		}
+		close(closed)
+	})
+	cmd := streamCommand(t, srv)
+	stdout, _ := cmd.StdoutPipe()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	readUntil(t, bufio.NewReader(stdout), "more ")
+	stdout.Close()
+	err := cmd.Wait()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("wait: %v", err)
+	}
+	status := exitErr.Sys().(syscall.WaitStatus)
+	t.Logf("exit status: %v", status)
+	if code := exitErr.ExitCode(); !(status.Signaled() && status.Signal() == syscall.SIGPIPE) && code != 141 {
+		t.Errorf("exit status %v", status)
+	}
+	if stderr.String() != "" {
+		t.Errorf("stderr %q", stderr.String())
+	}
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Error("the connection stayed open")
+	}
+}

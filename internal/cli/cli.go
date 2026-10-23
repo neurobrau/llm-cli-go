@@ -35,7 +35,9 @@ const (
 const (
 	ExitOK          = 0
 	ExitUsage       = 2
+	ExitIncomplete  = 8 // a streamed one-shot answer stopped early
 	ExitInterrupted = 130
+	ExitBrokenPipe  = 141 // stdout closed by the reader (128 + SIGPIPE)
 )
 
 // Providers, in help order; the first is the default.
@@ -43,7 +45,8 @@ var providers = []string{"openai", "ollama"}
 
 const helpText = `usage: neurobrau [-h] [--version] [--provider PROVIDER] [--model MODEL_ID]
                  [--reasoning-effort EFFORT] [--max-output-tokens N]
-                 [--answer-style STYLE] [--usage] [--plain] [--no-history]
+                 [--answer-style STYLE] [--usage] [--stream] [--plain]
+                 [--no-history]
                  [prompt]
 
 NeuroBräu Go CLI — educational multi-provider LLM command-line client.
@@ -72,24 +75,28 @@ options:
   --answer-style STYLE       brief, normal or detailed answers (default: in a
                              chat the saved choice, else normal)
   --usage                    print token usage to stderr after each response
+  --stream                   print a one-shot answer while it is generated
+                             (not yet in the interactive chat)
   --plain                    use the line-oriented chat (currently the only
                              interactive mode)
   --no-history               do not load or save conversation history for
                              this run
 
-Development version ` + Version + `: non-streaming one-shot prompts and a
-plain line-oriented chat that saves conversations. Without a prompt the
-plain chat starts (temporary until the fullscreen UI exists).
+Development version ` + Version + `: one-shot prompts (optionally streamed)
+and a non-streaming plain line-oriented chat that saves conversations.
+Without a prompt the plain chat starts (temporary until the fullscreen UI
+exists).
 OpenAI reads its API key from the OPENAI_API_KEY environment variable;
 Ollama uses OLLAMA_HOST (default http://127.0.0.1:11434) and needs no key.
-Not implemented yet: streaming, the fullscreen UI, changing settings in a
-chat and estimated costs.
+Not implemented yet: streaming in the chat, the fullscreen UI, changing
+settings in a chat and estimated costs.
 
 examples:
   neurobrau --plain
   neurobrau "What is a neural network?"
   neurobrau --provider ollama --model qwen3.5:4b "Hello"
   neurobrau --reasoning-effort high --answer-style brief --usage "Hello"
+  neurobrau --stream --usage "Explain backpropagation."
 `
 
 // Streams are the process's standard streams and its Ctrl+C signals.
@@ -124,6 +131,9 @@ func Run(ctx context.Context, args []string, s Streams) int {
 	}
 	if err := opts.validate(); err != nil {
 		return usageError(stderr, err.Error())
+	}
+	if len(opts.positional) == 0 && opts.stream {
+		return usageError(stderr, "--stream needs a prompt: streaming in the interactive chat is not implemented yet")
 	}
 	if len(opts.positional) == 0 {
 		// No fullscreen UI yet: every interactive start is the plain chat.
@@ -167,6 +177,7 @@ type options struct {
 	version    bool
 	usage      bool
 	plain      bool
+	stream     bool
 	noHistory  bool
 	provider   string
 	model      string
@@ -202,6 +213,7 @@ func parseArgs(args []string) (options, error) {
 	fs.BoolVar(&opts.version, "version", false, "")
 	fs.BoolVar(&opts.usage, "usage", false, "")
 	fs.BoolVar(&opts.plain, "plain", false, "")
+	fs.BoolVar(&opts.stream, "stream", false, "")
 	fs.BoolVar(&opts.noHistory, "no-history", false, "")
 	fs.StringVar(&opts.provider, "provider", "", "")
 	fs.StringVar(&opts.model, "model", "", "")
@@ -275,7 +287,7 @@ func checkChoice(flagName, value string, choices []string) error {
 
 // newProvider creates the named provider from the environment. Nothing is
 // requested yet; a missing OpenAI key is reported by the first request.
-func newProvider(name string) (llm.Provider, error) {
+func newProvider(name string) (llm.StreamingProvider, error) {
 	if name == "openai" {
 		return openai.New(openai.Config{APIKey: os.Getenv(openai.APIKeyEnvVar)}), nil
 	}
@@ -340,6 +352,9 @@ func runPrompt(ctx context.Context, opts options, stdout, stderr io.Writer) int 
 	req, err := buildRequest(ctx, provider, model, opts)
 	if err != nil {
 		return reportError(ctx, stderr, err)
+	}
+	if opts.stream {
+		return streamPrompt(ctx, provider, req, opts.usage, stdout, stderr)
 	}
 	resp, err := provider.Chat(ctx, req)
 	if err != nil {

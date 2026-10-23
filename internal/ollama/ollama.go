@@ -268,13 +268,27 @@ type chatRequest struct {
 // not to think unless the request says otherwise; reasoning they return is
 // kept out of the answer text.
 func (p *Provider) Chat(ctx context.Context, req llm.Request) (llm.Response, error) {
-	model, err := p.localModel(ctx, req.Model)
+	payload, err := p.chatPayload(ctx, req)
 	if err != nil {
 		return llm.Response{}, err
 	}
+	data, err := p.request(ctx, http.MethodPost, "/api/chat", payload, p.chatTimeout)
+	if err != nil {
+		return llm.Response{}, explainHTTPError(err, payload.Model)
+	}
+	return parseChatResponse(data)
+}
+
+// chatPayload checks the model (installed, local) and builds the
+// /api/chat body shared by Chat and Stream.
+func (p *Provider) chatPayload(ctx context.Context, req llm.Request) (chatRequest, error) {
+	model, err := p.localModel(ctx, req.Model)
+	if err != nil {
+		return chatRequest{}, err
+	}
 	caps, err := p.modelCapabilities(ctx, model)
 	if err != nil {
-		return llm.Response{}, err
+		return chatRequest{}, err
 	}
 	payload := chatRequest{Model: model.ID, Messages: make([]chatMessage, 0, len(req.Messages)+1)}
 	if req.Instructions != "" {
@@ -285,10 +299,10 @@ func (p *Provider) Chat(ctx context.Context, req llm.Request) (llm.Response, err
 	}
 	if hasCapability(caps, "thinking") {
 		if payload.Think, err = p.thinkValue(ctx, model, req.Reasoning); err != nil {
-			return llm.Response{}, err
+			return chatRequest{}, err
 		}
 	} else if r := req.Reasoning; r.Explicit && r.Effort != "" && r.Effort != "none" && r.Effort != "off" {
-		return llm.Response{}, &llm.Error{
+		return chatRequest{}, &llm.Error{
 			Kind:    llm.KindAPI,
 			Message: fmt.Sprintf("%s does not support thinking; turn reasoning off or choose another model.", model.ID),
 		}
@@ -296,12 +310,7 @@ func (p *Provider) Chat(ctx context.Context, req llm.Request) (llm.Response, err
 	if req.MaxOutputTokens > 0 {
 		payload.Options = &chatOptions{NumPredict: req.MaxOutputTokens}
 	}
-
-	data, err := p.request(ctx, http.MethodPost, "/api/chat", payload, p.chatTimeout)
-	if err != nil {
-		return llm.Response{}, explainHTTPError(err, model.ID)
-	}
-	return parseChatResponse(data)
+	return payload, nil
 }
 
 // thinkValue maps a reasoning setting to the `think` parameter of a model

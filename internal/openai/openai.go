@@ -8,7 +8,6 @@ package openai
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -203,22 +202,13 @@ func (p *Provider) Chat(ctx context.Context, req llm.Request) (llm.Response, err
 	if err != nil {
 		return llm.Response{}, err
 	}
-	effort := req.Reasoning.Effort
-	if !req.Reasoning.Explicit {
-		support, _ := p.ReasoningSupport(ctx, req.Model)
-		effort = support.Default
-	}
+	effort := p.effort(ctx, req)
 	resp, err := p.send(ctx, client, req, effort)
 	if err == nil || effort == "" || !rejectsReasoning(err) {
 		return resp, err
 	}
 	if req.Reasoning.Explicit {
-		return llm.Response{}, &llm.Error{
-			Kind: llm.KindAPI,
-			Message: fmt.Sprintf("%s does not accept reasoning effort '%s' (%s). "+
-				"Choose another value with --reasoning-effort.", req.Model, effort, err),
-			Err: err,
-		}
+		return llm.Response{}, rejectedEffort(req.Model, effort, err)
 	}
 	p.noReasoning[req.Model] = true
 	return p.send(ctx, client, req, "")

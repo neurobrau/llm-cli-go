@@ -594,7 +594,6 @@ func TestInvalidGenerationSettings(t *testing.T) {
 		{"empty tokens", []string{"--max-output-tokens=", "Hi"}, `invalid integer: ""`},
 		{"overflowing tokens", []string{"--max-output-tokens", "99999999999999999999", "Hi"}, "invalid integer"},
 		{"missing token value", []string{"Hi", "--max-output-tokens"}, "flag needs an argument: -max-output-tokens"},
-		{"stream is not implemented", []string{"--stream", "Hi"}, "flag provided but not defined: -stream"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
