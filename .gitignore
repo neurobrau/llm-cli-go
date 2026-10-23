@@ -23,3 +23,6 @@ credentials.sh
 # OS clutter
 .DS_Store
 Thumbs.db
+
+# Local AI coding agent tasks
+/.agent-tasks/

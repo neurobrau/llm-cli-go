@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -26,12 +27,13 @@ func TestMainExitCodes(t *testing.T) {
 		{[]string{"--version"}, 0},
 		{[]string{"--help"}, 0},
 		{[]string{"--not-a-real-flag"}, 2},
-		{[]string{"unexpected-input"}, 2},
+		{[]string{"two", "prompts"}, 2},
+		{[]string{"Hi"}, 3}, // OpenAI default without OPENAI_API_KEY
 	}
 	for _, tt := range tests {
 		t.Run(tt.args[0], func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], tt.args...)
-			cmd.Env = append(os.Environ(), runMainEnv+"=1")
+			cmd.Env = append(isolatedEnv(), runMainEnv+"=1")
 			err := cmd.Run()
 
 			code := 0
@@ -46,4 +48,17 @@ func TestMainExitCodes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// isolatedEnv is the current environment without OpenAI or Ollama settings,
+// with both servers pointed at a closed port, so a subprocess can never
+// use real credentials or reach a real service.
+func isolatedEnv() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "OPENAI_") && !strings.HasPrefix(kv, "OLLAMA_") {
+			env = append(env, kv)
+		}
+	}
+	return append(env, "OPENAI_BASE_URL=http://127.0.0.1:1/v1", "OLLAMA_HOST=127.0.0.1:1")
 }

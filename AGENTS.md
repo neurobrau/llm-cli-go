@@ -58,6 +58,6 @@ Tests should cover success and failure paths without the network, secrets, termi
 
 ## Task scope
 
-Implement only the current numbered task. For **Go Task 001**, deliver a minimal, buildable CLI with `--help`, `-h`, and `--version`, deterministic exit codes, basic documentation and tests. No API integrations, model discovery, streaming, persistence, full-screen UI, or additional CLI behavior yet.
+Implement only the explicitly named current task. Its task document defines the scope, non-goals and acceptance criteria; do not start the next task without approval.
 
 Distinguish the Go bootstrap version (`0.1.0-dev`) from feature parity with Python 0.3.0; do not claim parity until the later tasks pass.
