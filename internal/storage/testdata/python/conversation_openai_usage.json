@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "7c1e4b2a-9f3d-4e8a-b6c5-1a2b3c4d5e6f",
+  "created_at": "2026-10-22T05:54:00.123Z",
+  "updated_at": "2026-10-22T05:54:29.609Z",
+  "provider": "openai",
+  "model": "gpt-6-luna",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is a neural network?"
+    },
+    {
+      "role": "assistant",
+      "content": "A model made of layers."
+    }
+  ],
+  "requests": [
+    {
+      "at": "2026-10-22T05:54:29.609Z",
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "status": "completed",
+      "service_tier": "default",
+      "input_tokens": 1000,
+      "output_tokens": 200,
+      "total_tokens": 1200,
+      "cached_input_tokens": 600,
+      "cache_write_tokens": 100,
+      "reasoning_tokens": 50
+    }
+  ]
+}

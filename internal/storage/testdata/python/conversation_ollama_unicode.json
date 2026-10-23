@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "id": "0b6f8e52-2c1d-4c7e-9a3b-5d2e1f0a9c41",
+  "created_at": "2026-10-21T12:00:00.000Z",
+  "updated_at": "2026-10-21T12:03:41.512Z",
+  "provider": "ollama",
+  "model": "qwen3.5:4b",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Grüße, 世界! Ünïcödé 🎉\nLine two\twith tab"
+    },
+    {
+      "role": "assistant",
+      "content": "Quotes \" and backslash \\ and <tag> & more"
+    },
+    {
+      "role": "user",
+      "content": ""
+    },
+    {
+      "role": "assistant",
+      "content": "Answer after an empty prompt."
+    }
+  ],
+  "requests": [
+    {
+      "at": "2026-10-21T12:01:00.000Z",
+      "provider": "ollama",
+      "model": "qwen3.5:4b",
+      "status": "completed",
+      "input_tokens": 12,
+      "output_tokens": 5,
+      "total_tokens": 17
+    },
+    {
+      "at": "2026-10-21T12:03:41.000Z",
+      "provider": "ollama",
+      "model": "qwen3.5:4b",
+      "status": "incomplete",
+      "input_tokens": 30,
+      "output_tokens": 0
+    }
+  ]
+}

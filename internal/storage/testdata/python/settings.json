@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "answer_style": "brief",
+  "providers": {
+    "ollama": {
+      "models": {
+        "hf.co/org/model:Q4_K_M": {
+          "reasoning": "high"
+        },
+        "qwen3.5:4b": {
+          "reasoning": "on",
+          "max_output_tokens": 600
+        }
+      }
+    },
+    "openai": {
+      "models": {
+        "gpt-5": {
+          "reasoning": "default"
+        },
+        "gpt-6-luna": {
+          "max_output_tokens": null
+        }
+      }
+    }
+  }
+}

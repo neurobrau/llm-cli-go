@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "3f2a1b0c-8d7e-4f6a-9b5c-4d3e2f1a0b9c",
+  "created_at": "2026-09-01T08:00:00.000Z",
+  "updated_at": "2026-09-01T08:05:00.000Z",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello"
+    },
+    {
+      "role": "assistant",
+      "content": "Hi!"
+    }
+  ]
+}

@@ -144,14 +144,27 @@ internal/cli/    argument parsing, help, version, one-shot flow, exit codes
 internal/llm/    provider-neutral types, Provider interface, error kinds
 internal/ollama/ Ollama provider over net/http (/api/tags, /api/show, /api/chat)
 internal/openai/ OpenAI provider over the official SDK (Responses API, Models API)
+internal/storage/ Python-compatible JSON files: conversations, usage records,
+                 active.json, settings.json (not used by the CLI yet)
+scripts/         development helpers (optional Python storage parity check)
 docs/tui-spec.md authoritative, language-neutral specification (do not edit)
 AGENTS.md        instructions for coding agents working on this repository
 ```
 
+## Storage (Task 003A)
+
+`internal/storage` reads and writes the conversation, `active.json` and
+`settings.json` formats shared with the Python edition (XDG locations,
+atomic `0600` writes, `0700` app directories). It is a library only: **the
+one-shot CLI does not read or write any of these files yet.** See
+[`docs/storage.md`](docs/storage.md) for the API, the Python fixtures and the
+optional parity check.
+
 ## Roadmap (future — not implemented)
 
-1. Saved settings (`settings.json`), plain interactive chat and conversation
-   persistence compatible with the Python edition's on-disk JSON.
+1. Task 003B: wire the storage layer into sessions — saved settings, plain
+   interactive chat, restoring and saving conversations, `/reset`,
+   `/cleanup`, `--no-history`.
 2. Streaming output (`--stream`, including exit 8 for an incomplete streamed
    answer).
 3. Fullscreen retro TUI.

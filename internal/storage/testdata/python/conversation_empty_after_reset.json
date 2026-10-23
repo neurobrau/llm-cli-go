@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+  "created_at": "2026-10-22T09:00:00.000Z",
+  "updated_at": "2026-10-22T09:00:00.000Z",
+  "provider": "openai",
+  "model": "gpt-5",
+  "messages": []
+}
