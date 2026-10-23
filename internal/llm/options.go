@@ -119,12 +119,14 @@ func DescribeSupport(model string, support ReasoningSupport) string {
 	}
 	labels := make([]string, len(support.Values))
 	for i, v := range support.Values {
-		labels[i] = reasoningLabel(v)
+		labels[i] = ReasoningLabel(v)
 	}
 	return model + " supports reasoning: " + strings.Join(labels, ", ")
 }
 
-func reasoningLabel(value string) string {
+// ReasoningLabel is the display name of a reasoning value; "" (no
+// parameter) is "Model default".
+func ReasoningLabel(value string) string {
 	switch value {
 	case "xhigh":
 		return "XHigh"

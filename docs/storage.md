@@ -5,9 +5,10 @@ The Go implementation of NeuroBräu's local files, compatible with the Python
 sections 11 (conversations, `active.json`), 13 (`settings.json`) and 15
 (usage records); this page describes the Go API and its guarantees.
 
-> **Not wired into the CLI yet.** One-shot prompts neither read nor write
-> any of these files. Sessions, restore-at-startup and saving after each
-> reply come with Task 003B.
+> Used by the interactive chat through `internal/session` (restore at
+> startup, save after each completed answer, `/reset`, `/cleanup`);
+> settings are only read. One-shot prompts neither read nor write any of
+> these files.
 
 ## Files
 
@@ -70,11 +71,12 @@ byte (`fixtures_test.go`). They were generated with:
 python3 -B scripts/python_storage_parity.py generate ../llm-cli-python/src internal/storage/testdata/python
 ```
 
-The reverse direction (Python reading Go-written files) is an optional
-development check, skipped by `go test ./...`:
+The reverse direction (Python reading Go-written files, including a
+Python conversation that Go continued, recorded usage for and reset) is an
+optional development check, skipped by `go test ./...`:
 
 ```bash
-NEUROBRAU_PYTHON_SRC=$PWD/../llm-cli-python/src go test -run PythonReads ./internal/storage
+NEUROBRAU_PYTHON_SRC=$PWD/../llm-cli-python/src go test -run PythonReads ./internal/storage ./internal/session
 ```
 
 Both use temp directories only and never write into the Python repository

@@ -44,7 +44,8 @@ func run(t *testing.T, args ...string) (code int, stdout, stderr string) {
 func runCtx(t *testing.T, ctx context.Context, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code = Run(ctx, args, &out, &errOut)
+	// Empty input: an interactive chat ends at once (EOF).
+	code = Run(ctx, args, Streams{Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut})
 	return code, out.String(), errOut.String()
 }
 
@@ -59,7 +60,7 @@ func TestHelp(t *testing.T) {
 			if !strings.HasPrefix(stdout, "usage: neurobrau ") {
 				t.Errorf("stdout does not start with usage line:\n%s", stdout)
 			}
-			for _, want := range []string{"--help", "--version", "--provider", "--model", "openai or ollama (default: openai)",
+			for _, want := range []string{"--help", "--version", "--provider", "--model", "openai or ollama (default: openai;", "--plain", "--no-history", "omit to",
 				"gpt-6-luna", "OPENAI_API_KEY", "OLLAMA_HOST", "Not implemented yet:"} {
 				if !strings.Contains(stdout, want) {
 					t.Errorf("help text missing %q:\n%s", want, stdout)
@@ -75,14 +76,6 @@ func TestHelp(t *testing.T) {
 func TestHelpTakesPrecedenceOverLaterArguments(t *testing.T) {
 	isolateEnv(t)
 	code, stdout, stderr := run(t, "--provider", "ollama", "Hi", "--help")
-	if code != ExitOK || !strings.HasPrefix(stdout, "usage: ") || stderr != "" {
-		t.Errorf("got code=%d stdout=%q stderr=%q", code, stdout, stderr)
-	}
-}
-
-func TestNoArgumentsPrintsHelp(t *testing.T) {
-	isolateEnv(t)
-	code, stdout, stderr := run(t)
 	if code != ExitOK || !strings.HasPrefix(stdout, "usage: ") || stderr != "" {
 		t.Errorf("got code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -118,7 +111,6 @@ func TestUsageErrors(t *testing.T) {
 		{"invalid provider", []string{"--provider", "anthropic", "Hi"}, `argument --provider: invalid choice: "anthropic" (choose from openai, ollama)`},
 		{"invalid provider without prompt", []string{"--provider", "anthropic"}, "invalid choice"},
 		{"two prompts", []string{"--provider", "ollama", "a", "b"}, `unexpected argument: "b"`},
-		{"provider without prompt", []string{"--provider", "ollama"}, "a prompt is required; interactive chat is not implemented yet"},
 		{"model without value", []string{"--provider", "ollama", "--model"}, "flag needs an argument: -model"},
 	}
 	for _, tt := range tests {
@@ -828,7 +820,7 @@ func TestHelpAndVersionMakeNoRequests(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("OPENAI_BASE_URL", srv.URL+"/v1")
 	t.Setenv("OLLAMA_HOST", srv.URL)
-	for _, args := range [][]string{{"--help"}, {"-h"}, {"--version"}, {}, {"--usage", "--help"}, {"--reasoning-effort", "high", "--version"}} {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"--version"}, {"--plain", "--help"}, {"--usage", "--help"}, {"--reasoning-effort", "high", "--version"}} {
 		if code, _, stderr := run(t, args...); code != ExitOK || stderr != "" {
 			t.Errorf("%v: code=%d stderr=%q", args, code, stderr)
 		}

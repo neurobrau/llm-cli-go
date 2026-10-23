@@ -14,8 +14,15 @@ func main() {
 }
 
 func run() int {
-	// Ctrl+C cancels a running request instead of killing the process.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	return cli.Run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	// Ctrl+C is delivered to the CLI instead of killing the process: it
+	// cancels a running request, or ends the chat when it is idle.
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	defer signal.Stop(interrupts)
+	return cli.Run(context.Background(), os.Args[1:], cli.Streams{
+		Stdin:      os.Stdin,
+		Stdout:     os.Stdout,
+		Stderr:     os.Stderr,
+		Interrupts: interrupts,
+	})
 }

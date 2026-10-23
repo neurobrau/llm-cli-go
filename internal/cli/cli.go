@@ -14,7 +14,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/neurobrau/llm-cli-go/internal/chat"
 	"github.com/neurobrau/llm-cli-go/internal/llm"
 	"github.com/neurobrau/llm-cli-go/internal/ollama"
 	"github.com/neurobrau/llm-cli-go/internal/openai"
@@ -41,18 +43,21 @@ var providers = []string{"openai", "ollama"}
 
 const helpText = `usage: neurobrau [-h] [--version] [--provider PROVIDER] [--model MODEL_ID]
                  [--reasoning-effort EFFORT] [--max-output-tokens N]
-                 [--answer-style STYLE] [--usage]
+                 [--answer-style STYLE] [--usage] [--plain] [--no-history]
                  [prompt]
 
 NeuroBräu Go CLI — educational multi-provider LLM command-line client.
 
 positional arguments:
-  prompt                     prompt text for a one-shot request
+  prompt                     prompt text for a one-shot request; omit to
+                             start an interactive chat
 
 options:
   -h, --help                 show this help message and exit
   --version                  show program's version number and exit
-  --provider PROVIDER        LLM provider: openai or ollama (default: openai)
+  --provider PROVIDER        LLM provider: openai or ollama (default: openai;
+                             an interactive chat without --provider/--model
+                             continues with the last conversation's)
   --model MODEL_ID           model identifier (default: gpt-6-luna for
                              openai, the most recently installed local model
                              for ollama)
@@ -60,29 +65,48 @@ options:
                              high, xhigh, max, model-default. model-default
                              sends no effort, so the model uses its own
                              default (gpt-6-luna: medium). Without this flag:
+                             in a chat the saved choice for the model, else
                              none where supported (Ollama: thinking off)
   --max-output-tokens N      maximum number of tokens to generate (default:
-                             the model's)
-  --answer-style STYLE       brief, normal or detailed answers (default:
-                             normal)
-  --usage                    print token usage to stderr after the response
+                             in a chat the saved choice, else the model's)
+  --answer-style STYLE       brief, normal or detailed answers (default: in a
+                             chat the saved choice, else normal)
+  --usage                    print token usage to stderr after each response
+  --plain                    use the line-oriented chat (currently the only
+                             interactive mode)
+  --no-history               do not load or save conversation history for
+                             this run
 
-Development version ` + Version + `: non-streaming one-shot prompts only.
+Development version ` + Version + `: non-streaming one-shot prompts and a
+plain line-oriented chat that saves conversations. Without a prompt the
+plain chat starts (temporary until the fullscreen UI exists).
 OpenAI reads its API key from the OPENAI_API_KEY environment variable;
 Ollama uses OLLAMA_HOST (default http://127.0.0.1:11434) and needs no key.
-Not implemented yet: interactive chat, streaming, history, saved settings
-and the fullscreen UI.
+Not implemented yet: streaming, the fullscreen UI, changing settings in a
+chat and estimated costs.
 
 examples:
+  neurobrau --plain
   neurobrau "What is a neural network?"
   neurobrau --provider ollama --model qwen3.5:4b "Hello"
   neurobrau --reasoning-effort high --answer-style brief --usage "Hello"
 `
 
-// Run parses args (without the program name), writes output to stdout and
-// stderr, and returns the process exit code. Canceling ctx (e.g. on Ctrl+C)
-// aborts a running request.
-func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+// Streams are the process's standard streams and its Ctrl+C signals.
+type Streams struct {
+	Stdin          io.Reader // read by the interactive chat only
+	Stdout, Stderr io.Writer
+	// Interrupts delivers Ctrl+C (os.Interrupt); nil: never. A one-shot
+	// request is canceled by the first one; the chat cancels its running
+	// request or exits when idle.
+	Interrupts <-chan os.Signal
+}
+
+// Run parses args (without the program name), runs a one-shot prompt or
+// the interactive chat, and returns the process exit code. Canceling ctx
+// aborts a running request (exit code 130).
+func Run(ctx context.Context, args []string, s Streams) int {
+	stdout, stderr := s.Stdout, s.Stderr
 	opts, err := parseArgs(args)
 	if errors.Is(err, flag.ErrHelp) {
 		fmt.Fprint(stdout, helpText)
@@ -98,20 +122,52 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "NeuroBräu Go CLI %s\n", Version)
 		return ExitOK
 	}
-	if len(args) == 0 {
-		// Temporary until interactive chat is implemented.
-		fmt.Fprint(stdout, helpText)
-		return ExitOK
-	}
 	if err := opts.validate(); err != nil {
 		return usageError(stderr, err.Error())
 	}
+	if len(opts.positional) == 0 {
+		// No fullscreen UI yet: every interactive start is the plain chat.
+		return runInteractive(ctx, opts, s)
+	}
+	ctx, stop := cancelOnInterrupt(ctx, s.Interrupts)
+	defer stop()
 	return runPrompt(ctx, opts, stdout, stderr)
+}
+
+// cancelOnInterrupt returns a context that the first Ctrl+C cancels, and
+// an idempotent function that stops watching, cancels the context and
+// reports whether a Ctrl+C was received.
+func cancelOnInterrupt(parent context.Context, interrupts <-chan os.Signal) (context.Context, func() bool) {
+	ctx, cancel := context.WithCancel(parent)
+	if interrupts == nil {
+		return ctx, func() bool { cancel(); return false }
+	}
+	stopped := make(chan struct{})
+	finished := make(chan struct{})
+	interrupted := false
+	go func() {
+		defer close(finished)
+		select {
+		case <-interrupts:
+			interrupted = true
+			cancel()
+		case <-stopped:
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, sync.OnceValue(func() bool {
+		close(stopped)
+		<-finished
+		cancel()
+		return interrupted
+	})
 }
 
 type options struct {
 	version    bool
 	usage      bool
+	plain      bool
+	noHistory  bool
 	provider   string
 	model      string
 	reasoning  optionalString
@@ -145,6 +201,8 @@ func parseArgs(args []string) (options, error) {
 	fs.Usage = func() {}
 	fs.BoolVar(&opts.version, "version", false, "")
 	fs.BoolVar(&opts.usage, "usage", false, "")
+	fs.BoolVar(&opts.plain, "plain", false, "")
+	fs.BoolVar(&opts.noHistory, "no-history", false, "")
 	fs.StringVar(&opts.provider, "provider", "", "")
 	fs.StringVar(&opts.model, "model", "", "")
 	fs.Var(&opts.reasoning, "reasoning-effort", "")
@@ -171,14 +229,13 @@ func parseArgs(args []string) (options, error) {
 	return opts, nil
 }
 
-// validate checks a prompt invocation and applies the default provider.
-// Flag values are checked before the prompt, as argparse does.
+// validate checks the flag values, then the prompt if one was given, as
+// argparse does. An empty provider stays empty (not given).
 func (o *options) validate() error {
-	if o.provider == "" {
-		o.provider = providers[0]
-	}
-	if err := checkChoice("--provider", o.provider, providers); err != nil {
-		return err
+	if o.provider != "" {
+		if err := checkChoice("--provider", o.provider, providers); err != nil {
+			return err
+		}
 	}
 	if o.reasoning.set {
 		if err := checkChoice("--reasoning-effort", o.reasoning.value, append(slices.Clone(llm.ReasoningEfforts), llm.ModelDefault)); err != nil {
@@ -203,10 +260,7 @@ func (o *options) validate() error {
 	if len(o.positional) > 1 {
 		return fmt.Errorf("unexpected argument: %q", o.positional[1])
 	}
-	if len(o.positional) == 0 {
-		return errors.New("a prompt is required; interactive chat is not implemented yet")
-	}
-	if strings.TrimSpace(o.positional[0]) == "" {
+	if len(o.positional) == 1 && strings.TrimSpace(o.positional[0]) == "" {
 		return errors.New("prompt must not be empty")
 	}
 	return nil
@@ -269,6 +323,9 @@ func buildRequest(ctx context.Context, provider llm.Provider, model string, opts
 }
 
 func runPrompt(ctx context.Context, opts options, stdout, stderr io.Writer) int {
+	if opts.provider == "" {
+		opts.provider = providers[0]
+	}
 	provider, err := newProvider(opts.provider)
 	if err != nil {
 		return usageError(stderr, err.Error())
@@ -292,30 +349,9 @@ func runPrompt(ctx context.Context, opts options, stdout, stderr io.Writer) int 
 	// even if it stopped early (resp.IncompleteReason).
 	fmt.Fprintln(stdout, resp.Text)
 	if opts.usage {
-		fmt.Fprintln(stderr, formatUsage(resp.Usage))
+		fmt.Fprintln(stderr, chat.FormatUsage(resp.Usage))
 	}
 	return ExitOK
-}
-
-// formatUsage shows the reported input/output/total token counts only;
-// nothing is estimated or derived.
-func formatUsage(u *llm.Usage) string {
-	if u == nil {
-		return "Token usage: not reported"
-	}
-	var parts []string
-	for _, f := range []struct {
-		name  string
-		count *int
-	}{{"input", u.InputTokens}, {"output", u.OutputTokens}, {"total", u.TotalTokens}} {
-		if f.count != nil {
-			parts = append(parts, fmt.Sprintf("%s=%d", f.name, *f.count))
-		}
-	}
-	if len(parts) == 0 {
-		return "Token usage: not reported"
-	}
-	return "Token usage: " + strings.Join(parts, ", ")
 }
 
 func reportError(ctx context.Context, stderr io.Writer, err error) int {
@@ -325,7 +361,8 @@ func reportError(ctx context.Context, stderr io.Writer, err error) int {
 	}
 	fmt.Fprintf(stderr, "%s: error: %s\n", ProgName, err)
 	var settingsErr settingsError
-	if errors.As(err, &settingsErr) {
+	var chatSettingsErr *chat.SettingsError
+	if errors.As(err, &settingsErr) || errors.As(err, &chatSettingsErr) {
 		return ExitUsage
 	}
 	return llm.ExitCode(err)

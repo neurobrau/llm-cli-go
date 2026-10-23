@@ -119,13 +119,19 @@ func (p *Provider) DefaultModel(context.Context) (string, error) { return Defaul
 
 func (p *Provider) sdkClient() (*sdk.Client, error) {
 	if p.client == nil {
-		return nil, &llm.Error{
-			Kind:    llm.KindMissingAPIKey,
-			Message: APIKeyEnvVar + " is not set. Export it in your environment and try again.",
-			Err:     ErrMissingAPIKey,
-		}
+		return nil, MissingAPIKeyError()
 	}
 	return p.client, nil
+}
+
+// MissingAPIKeyError is the error every request returns without an API key.
+// Interactive chat reports it before starting, as the Python edition does.
+func MissingAPIKeyError() *llm.Error {
+	return &llm.Error{
+		Kind:    llm.KindMissingAPIKey,
+		Message: APIKeyEnvVar + " is not set. Export it in your environment and try again.",
+		Err:     ErrMissingAPIKey,
+	}
 }
 
 // ListModels returns the text-capable model IDs from the Models API,
