@@ -6,12 +6,9 @@ import (
 	"strings"
 
 	"github.com/neurobrau/llm-cli-go/internal/llm"
+	"github.com/neurobrau/llm-cli-go/internal/pricing"
 	"github.com/neurobrau/llm-cli-go/internal/storage"
 )
-
-// CostNote stands in for the estimated cost until the pricing catalog
-// exists in the Go edition; no amount is ever invented.
-const CostNote = "Estimated cost: not implemented in the Go edition yet."
 
 // FormatUsage is the --usage line: the reported input, output and total
 // counts only.
@@ -66,9 +63,10 @@ func TotalUsage(records []storage.UsageRecord) *llm.Usage {
 	return total
 }
 
-// UsageReport is the /usage text: the conversation's API usage as
-// reported (docs/tui-spec.md, section 15). Cached and cache-write tokens
-// are shown as parts of the input, reasoning tokens as part of the output.
+// UsageReport is the /usage text of the plain and the fullscreen chat: the
+// conversation's API usage as reported and its ESTIMATED cost
+// (docs/tui-spec.md, section 15). Cached and cache-write tokens are shown
+// as parts of the input, reasoning tokens as part of the output.
 func UsageReport(records []storage.UsageRecord) string {
 	if len(records) == 0 {
 		return "Token usage: no API requests in this conversation yet."
@@ -91,12 +89,16 @@ func UsageReport(records []storage.UsageRecord) string {
 	if incomplete > 0 {
 		lines = append(lines, fmt.Sprintf("Includes %d incomplete answer(s): billed, but not saved as messages.", incomplete))
 	}
-	lines = append(lines, CostNote)
+	lines = append(lines, pricing.Describe(pricing.Total(records)))
 	return strings.Join(lines, "\n")
 }
 
-// usageBreakdown has one `label: count` line per reported count.
+// usageBreakdown has one `label: count` line per reported count: none for
+// records that report no counts, as in the Python edition.
 func usageBreakdown(u *llm.Usage) []string {
+	if u == nil {
+		return []string{"Token usage: not reported"}
+	}
 	var lines []string
 	for _, f := range []struct {
 		label string
@@ -113,9 +115,6 @@ func usageBreakdown(u *llm.Usage) []string {
 			lines = append(lines, f.label+": "+formatCount(*f.count))
 		}
 	}
-	if len(lines) == 0 {
-		return []string{"Token usage: not reported"}
-	}
 	return lines
 }
 
@@ -129,4 +128,24 @@ func formatCount(n int) string {
 		s = s[:i] + "," + s[i:]
 	}
 	return s
+}
+
+// FormatDuration is the `Duration: …` line for provider-reported timing
+// (Ollama); "" when the total is not reported.
+func FormatDuration(t llm.Timing) string {
+	if t.Total <= 0 {
+		return ""
+	}
+	line := fmt.Sprintf("Duration: %.2f s", t.Total.Seconds())
+	var details []string
+	if t.Load > 0 {
+		details = append(details, fmt.Sprintf("load %.2f s", t.Load.Seconds()))
+	}
+	if t.Eval > 0 {
+		details = append(details, fmt.Sprintf("generation %.2f s", t.Eval.Seconds()))
+	}
+	if len(details) > 0 {
+		line += " (" + strings.Join(details, ", ") + ")"
+	}
+	return line
 }

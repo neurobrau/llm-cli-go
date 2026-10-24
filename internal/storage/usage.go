@@ -23,22 +23,26 @@ type UsageRecord struct {
 	Model       string
 	Status      string // StatusCompleted or StatusIncomplete
 	ServiceTier string // "" if not reported
-	Usage       llm.Usage
+	// EmptyServiceTier marks a stored `"service_tier": ""`: reported, but
+	// empty (absent and null are not reported). It is kept when the
+	// record is written back, as the Python edition does.
+	EmptyServiceTier bool
+	Usage            llm.Usage
 }
 
 // usageRecordJSON fixes the key order of a written record.
 type usageRecordJSON struct {
-	At                string `json:"at"`
-	Provider          string `json:"provider"`
-	Model             string `json:"model"`
-	Status            string `json:"status"`
-	ServiceTier       string `json:"service_tier,omitempty"`
-	InputTokens       *int   `json:"input_tokens,omitempty"`
-	OutputTokens      *int   `json:"output_tokens,omitempty"`
-	TotalTokens       *int   `json:"total_tokens,omitempty"`
-	CachedInputTokens *int   `json:"cached_input_tokens,omitempty"`
-	CacheWriteTokens  *int   `json:"cache_write_tokens,omitempty"`
-	ReasoningTokens   *int   `json:"reasoning_tokens,omitempty"`
+	At                string  `json:"at"`
+	Provider          string  `json:"provider"`
+	Model             string  `json:"model"`
+	Status            string  `json:"status"`
+	ServiceTier       *string `json:"service_tier,omitempty"`
+	InputTokens       *int    `json:"input_tokens,omitempty"`
+	OutputTokens      *int    `json:"output_tokens,omitempty"`
+	TotalTokens       *int    `json:"total_tokens,omitempty"`
+	CachedInputTokens *int    `json:"cached_input_tokens,omitempty"`
+	CacheWriteTokens  *int    `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens   *int    `json:"reasoning_tokens,omitempty"`
 }
 
 func (r UsageRecord) toJSON() usageRecordJSON {
@@ -46,10 +50,14 @@ func (r UsageRecord) toJSON() usageRecordJSON {
 	if status == "" {
 		status = StatusCompleted
 	}
+	var tier *string
+	if r.ServiceTier != "" || r.EmptyServiceTier {
+		tier = &r.ServiceTier
+	}
 	u := r.Usage
 	return usageRecordJSON{
 		At: formatTimestamp(r.At), Provider: r.Provider, Model: r.Model, Status: status,
-		ServiceTier: r.ServiceTier,
+		ServiceTier: tier,
 		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens,
 		CachedInputTokens: u.CachedInputTokens, CacheWriteTokens: u.CacheWriteTokens,
 		ReasoningTokens: u.ReasoningTokens,
@@ -81,6 +89,7 @@ func parseUsageRecord(raw json.RawMessage) (UsageRecord, bool) {
 		if r.ServiceTier, ok = o.str("service_tier"); !ok {
 			return UsageRecord{}, false
 		}
+		r.EmptyServiceTier = r.ServiceTier == ""
 	}
 	for _, f := range []struct {
 		key string

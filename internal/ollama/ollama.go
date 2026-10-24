@@ -133,6 +133,16 @@ func (p *Provider) DefaultModel(ctx context.Context) (string, error) {
 	return models[0].ID, nil
 }
 
+// CheckAvailability reloads /api/tags and reports an unreachable server
+// or the absence of local chat models (cloud models do not count).
+func (p *Provider) CheckAvailability(ctx context.Context) error {
+	if _, err := p.discover(ctx, true); err != nil {
+		return err
+	}
+	_, err := p.DefaultModel(ctx)
+	return err
+}
+
 // localModel looks up an installed local model, refreshing the list once
 // in case it was installed since. Cloud and missing models are refused.
 func (p *Provider) localModel(ctx context.Context, id string) (llm.Model, error) {

@@ -543,3 +543,17 @@ func TestListModelsIsNeverRetried(t *testing.T) {
 		t.Errorf("DiscoveryTimeout = %v, want 5s (spec section 12)", DiscoveryTimeout)
 	}
 }
+
+func TestCheckAvailability(t *testing.T) {
+	f := newFakeAPI(t, map[string]http.HandlerFunc{"GET /v1/models": reply(200, `{"object":"list","data":[{"id":"gpt-6-luna","object":"model"}]}`)})
+	if err := f.provider(Config{}).CheckAvailability(context.Background()); err != nil {
+		t.Error(err)
+	}
+	if err := New(Config{}).CheckAvailability(context.Background()); !errors.Is(err, ErrMissingAPIKey) {
+		t.Errorf("without a key: %v", err)
+	}
+	f = newFakeAPI(t, map[string]http.HandlerFunc{"GET /v1/models": reply(500, `{"error":{"message":"down"}}`)})
+	if err := f.provider(Config{}).CheckAvailability(context.Background()); err == nil || strings.Contains(err.Error(), fakeKey) {
+		t.Errorf("server error: %v", err)
+	}
+}

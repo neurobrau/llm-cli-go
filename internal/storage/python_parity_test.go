@@ -36,7 +36,11 @@ func TestPythonReadsGoFiles(t *testing.T) {
 			CreatedAt: mustTime(t, "2026-10-22T05:54:00Z"), UpdatedAt: mustTime(t, "2026-10-22T05:54:29.609Z"),
 			Messages: []llm.Message{{Role: llm.RoleUser, Content: "Tab\there, emoji 🎉, CJK 世界"}, {Role: llm.RoleAssistant, Content: "ok"}},
 			Requests: []UsageRecord{{At: mustTime(t, "2026-10-22T05:54:29.609Z"), Provider: "openai", Model: "gpt-6-luna",
-				Status: StatusIncomplete, ServiceTier: "flex", Usage: llm.Usage{InputTokens: intp(5), ReasoningTokens: intp(2)}}}},
+				Status: StatusIncomplete, ServiceTier: "flex", Usage: llm.Usage{InputTokens: intp(5), ReasoningTokens: intp(2)}},
+				{At: mustTime(t, "2026-10-22T05:55:00Z"), Provider: "openai", Model: "gpt-6-luna",
+					Status: StatusCompleted, EmptyServiceTier: true, Usage: llm.Usage{InputTokens: intp(1), OutputTokens: intp(1)}},
+				{At: mustTime(t, "2026-10-22T05:56:00Z"), Provider: "openai", Model: "gpt-6-luna",
+					Status: StatusCompleted, Usage: llm.Usage{InputTokens: intp(1), OutputTokens: intp(1)}}}},
 	}
 	for _, c := range conversations {
 		if err := store.Save(c); err != nil {

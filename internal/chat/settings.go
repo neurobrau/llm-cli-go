@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/neurobrau/llm-cli-go/internal/llm"
 	"github.com/neurobrau/llm-cli-go/internal/storage"
@@ -39,8 +40,20 @@ func (e *SettingsError) Unwrap() error { return e.Err }
 //
 // Without an override or a usable saved value, reasoning stays
 // llm.Reasoning{}: the provider applies its built-in default ("none" where
-// the model supports it, Ollama thinking off).
+// the model supports it, Ollama thinking off). The model's support is
+// looked up in any case; a failed lookup is a notice.
 func ResolveSettings(ctx context.Context, p llm.Provider, model string, saved storage.Settings, o Overrides) (Settings, []string, error) {
+	return resolveSettings(ctx, p, model, saved, o, true)
+}
+
+// ResolveSwitchedSettings is ResolveSettings for a model chosen in the
+// fullscreen UI: an override the model does not support is skipped with a
+// notice instead of being an error.
+func ResolveSwitchedSettings(ctx context.Context, p llm.Provider, model string, saved storage.Settings, o Overrides) (Settings, []string, error) {
+	return resolveSettings(ctx, p, model, saved, o, false)
+}
+
+func resolveSettings(ctx context.Context, p llm.Provider, model string, saved storage.Settings, o Overrides, strict bool) (Settings, []string, error) {
 	var notices []string
 	var support *llm.ReasoningSupport
 	getSupport := func() (llm.ReasoningSupport, error) {
@@ -67,16 +80,25 @@ func ResolveSettings(ctx context.Context, p llm.Provider, model string, saved st
 		settings.AnswerStyle = llm.StyleNormal
 	}
 
-	switch {
-	case o.Reasoning != "":
+	// A lenient override the model does not support falls back to the
+	// saved value, as if it had not been given.
+	decided := false
+	if o.Reasoning != "" {
 		s, err := getSupport()
 		if err != nil {
 			return Settings{}, nil, err
 		}
-		if settings.Reasoning, err = llm.ResolveReasoning(model, s, o.Reasoning); err != nil {
+		settings.Reasoning, err = llm.ResolveReasoning(model, s, o.Reasoning)
+		switch {
+		case err == nil:
+			decided = true
+		case strict:
 			return Settings{}, nil, &SettingsError{err}
+		default:
+			notices = append(notices, strings.TrimSuffix(err.Error(), ".")+"; using the default.")
 		}
-	case prefs.Reasoning != "":
+	}
+	if !decided && prefs.Reasoning != "" {
 		s, err := getSupport()
 		if err != nil {
 			return Settings{}, nil, err
@@ -90,19 +112,32 @@ func ResolveSettings(ctx context.Context, p llm.Provider, model string, saved st
 			notices = append(notices, fmt.Sprintf("Saved reasoning '%s' is not available for %s (%s); using %s.",
 				llm.ReasoningLabel(prefs.Reasoning), model, llm.DescribeSupport(model, s), llm.ReasoningLabel(s.Default)))
 		}
+	} else if !decided {
+		// The built-in default depends on the model's support; as in the
+		// Python edition, a failed lookup is a notice. (The lookup is
+		// cached, so requests do not ask again.)
+		if _, err := getSupport(); err != nil {
+			return Settings{}, nil, err
+		}
 	}
 
-	switch {
-	case o.MaxOutputTokens > 0:
+	decided = false
+	if o.MaxOutputTokens > 0 {
 		limit, err := outputLimit(ctx, p, model)
 		if err != nil {
 			return Settings{}, nil, err
 		}
-		if err := llm.CheckMaxOutputTokens(model, o.MaxOutputTokens, limit); err != nil {
+		err = llm.CheckMaxOutputTokens(model, o.MaxOutputTokens, limit)
+		switch {
+		case err == nil:
+			settings.MaxOutputTokens, decided = o.MaxOutputTokens, true
+		case strict:
 			return Settings{}, nil, &SettingsError{err}
+		default:
+			notices = append(notices, err.Error()+" Using the default.")
 		}
-		settings.MaxOutputTokens = o.MaxOutputTokens
-	case prefs.MaxOutputTokensSet && prefs.MaxOutputTokens > 0: // 0: saved "model default"
+	}
+	if !decided && prefs.MaxOutputTokensSet && prefs.MaxOutputTokens > 0 { // 0: saved "model default"
 		limit, err := outputLimit(ctx, p, model)
 		if err != nil {
 			return Settings{}, nil, err
@@ -128,4 +163,15 @@ func outputLimit(ctx context.Context, p llm.Provider, model string) (int, error)
 		return 0, nil
 	}
 	return limit, nil
+}
+
+// EffectiveReasoning is the reasoning value requests with these settings
+// send, in the provider's vocabulary, given the model's support: the
+// chosen value, else NeuroBräu's built-in default. "" sends no parameter,
+// so the model uses its own default.
+func (s Settings) EffectiveReasoning(support llm.ReasoningSupport) string {
+	if s.Reasoning.Explicit {
+		return s.Reasoning.Effort
+	}
+	return support.Default
 }

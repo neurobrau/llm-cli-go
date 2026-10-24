@@ -5,7 +5,8 @@ client.
 
 - Module: `github.com/neurobrau/llm-cli-go`
 - Executable: `neurobrau`
-- Version: `0.1.0-dev` (bootstrap)
+- Version: `0.4.0-dev` (release candidate of the 0.4 milestone; see the
+  [release checklist](docs/release-checklist.md))
 
 ## Relationship to the Python edition
 
@@ -17,15 +18,58 @@ JSON formats, file locations, provider request mappings, usage/pricing rules
 and exit codes.
 
 The Go edition is not a line-by-line translation, and its version numbers are
-independent. **`0.1.0-dev` does not have feature parity with Python 0.3.0.**
+independent. `0.4.0-dev` implements the Python 0.3.0 behavior; the remaining,
+documented differences are listed in [`docs/parity.md`](docs/parity.md),
+together with the optional checks that compare both editions.
 
-## Current status (Go Task 004A — streaming one-shot prompts)
+Go development milestones (not releases or tags):
 
-Working today: one-shot prompts (optionally **streamed** with `--stream`)
-and a non-streaming, line-oriented **interactive chat** with **OpenAI** (Responses API, the
-default) or a **local Ollama** server, with generation settings, saved
-settings (read only) and conversations saved in the Python edition's
-formats.
+| Milestone | Scope |
+|---|---|
+| 0.1 | command line and one-shot prompts (OpenAI, Ollama) |
+| 0.2 | interactive line-oriented chat with saved history |
+| 0.3 | fullscreen DOS-style UI and streaming |
+| 0.4 | working F2–F6 menus, saved settings and estimated costs |
+
+## Current status (0.4.0-dev)
+
+Working today: one-shot prompts and an **interactive chat** — the DOS-style
+**fullscreen UI** on a terminal, or the line-oriented chat — all optionally
+**streamed** with `--stream`, with **OpenAI** (Responses API, the default)
+or a **local Ollama** server, with generation settings and conversations
+saved in the Python edition's formats. In the fullscreen UI, **F2–F6**
+switch model and provider and change the generation settings, which are
+saved in `settings.json`. `/usage` and the settings panel show the
+conversation's token usage and its **estimated** API cost (see
+[Estimated cost](#estimated-cost)).
+
+### Quick start
+
+Build and run from the repository (no installation, no PATH changes):
+
+```bash
+go build -o bin/neurobrau ./cmd/neurobrau
+./bin/neurobrau --version                                    # NeuroBräu Go CLI 0.4.0-dev
+./bin/neurobrau --provider ollama "Say hello in five words." # one-shot
+./bin/neurobrau --provider ollama --stream "Count to five."  # one-shot, streamed
+./bin/neurobrau --provider ollama --stream                   # fullscreen UI (on a terminal)
+./bin/neurobrau --provider ollama --plain                    # line-oriented chat
+./bin/neurobrau --provider ollama --no-history               # no conversation files
+```
+
+In the fullscreen UI, F2 picks a model, F3 a provider, F4–F6 change
+reasoning, max output tokens and answer style. **`--no-history` only stops
+conversation files: F4–F6 choices are still saved in `settings.json`.** To
+try everything without touching your real history or settings, use
+throwaway directories:
+
+```bash
+d=$(mktemp -d)
+HOME=$d XDG_STATE_HOME=$d/state XDG_CONFIG_HOME=$d/config ./bin/neurobrau --provider ollama --stream
+```
+
+OpenAI is the default provider and needs `OPENAI_API_KEY`; its requests are
+billed by OpenAI. The examples below write `neurobrau` for `./bin/neurobrau`.
 
 ```bash
 neurobrau "What is a neural network?"                 # OpenAI, gpt-6-luna
@@ -108,25 +152,145 @@ history or settings.
   more without it; a rejected `--reasoning-effort` is reported.
 - A stream that ends without its final event is an error (OpenAI: exit 1;
   Ollama: connection, exit 7).
-- `--stream` without a prompt exits 2: the interactive chat does not stream
-  yet (Task 004B).
+- `--stream` without a prompt starts the chat with streamed answers
+  (fullscreen on a terminal, see below; plain chat otherwise).
+
+#### Streaming in the plain chat
+
+```bash
+neurobrau --plain --stream         # or --stream with redirected stdin/stdout
+neurobrau --provider ollama --model qwen3.5:4b --plain --stream --usage
+```
+
+`AI > ` appears with the first piece of the answer, then the text as it
+arrives (an empty answer still prints `AI > `). Reasoning is never shown.
+Only a completed answer is added to the conversation and saved, using the
+assembled text; generation settings and saved preferences apply to every
+request exactly as without `--stream`.
+
+| Outcome | Shown | Conversation |
+|---|---|---|
+| completed | the answer; with `--usage`, usage (and Ollama durations) on stderr | exchange committed and saved; one usage record |
+| stopped early | partial text, `warning: Response incomplete: <reason>. The partial response was not saved.` | unchanged; one `incomplete` usage record if usage was reported |
+| failed | partial text, `error: <message>` (+ the same suffix if text was shown) | unchanged |
+| Ctrl+C | `Request cancelled.` (+ the suffix if text was shown); back at `YOU > ` | unchanged; the connection is closed |
+
+Ctrl+C at the prompt still exits with 130; `/exit` and Ctrl+D exit with 0.
+A partial, failed or canceled answer is never sent as context later.
 
 ### Interactive chat
 
 ```bash
-neurobrau                          # plain chat (temporary: no fullscreen UI yet)
-neurobrau --plain                  # plain chat
+neurobrau                          # fullscreen UI on a terminal
+neurobrau --stream                 # fullscreen, answers shown while generated
+neurobrau --plain                  # line-oriented chat, also on a terminal
 neurobrau --provider ollama --model qwen3.5:4b --plain
 neurobrau --plain --no-history     # nothing is restored or saved
+printf 'Hi\n' | neurobrau           # redirected: line-oriented chat
 ```
 
-Without a prompt, `neurobrau` starts the line-oriented chat. In the Python
-edition (and later in Go, Task 005) a terminal gets the fullscreen UI;
-until then **every interactive start is the plain chat**, also on a
-terminal. Redirected stdin/stdout work too (`printf 'Hi\n' | neurobrau`).
+Without a prompt, `neurobrau` starts the **fullscreen UI** when stdin and
+stdout are both terminals and `TERM` is set and not `dumb`; otherwise, and
+always with `--plain`, it starts the **line-oriented chat**. A prompt
+argument is always a one-shot request. `--stream` only decides whether
+answers appear while they are generated, not which chat starts. Startup
+problems (missing `OPENAI_API_KEY`, unreachable Ollama, an unsupported
+setting) are reported before the terminal is switched to fullscreen.
+
+#### Fullscreen UI
 
 ```text
-NeuroBräu Go CLI 0.1.0-dev
++-[ NeuroBräu Go CLI 0.4.0-dev ]--------------------------+-[ LLM SETTINGS ]---+
+| YOU > What is a neural network?                         | F2 MODEL           |
+|                                                         |  qwen3.5:4b        |
+| AI > A neural network is a model made of layers of      | F3 PROVIDER        |
+|      connected units that learn weights from data.      |  Ollama            |
+ …
++-[ Status ]----------------------------------------------+--------------------+
+| DONE | 7.17s total | load 0.20s | generation 1.88s | 15.96 tok/s             |
++-[ Input ]--------------------------------------------------------------------+
+| YOU >                                                                        |
++------------------------------------------------------------------------------+
+ F1 /help | /reset /exit | F2-F6 settings | PgUp/PgDn scroll | Ctrl+C quit
+```
+
+Layout, colors, keys and messages follow `docs/tui-spec.md` (sections
+1–9 and 14): the conversation on the left, the **LLM SETTINGS** panel
+(model, provider, effective reasoning, max tokens, answer style,
+conversation token totals) from 64 columns, a runtime status bar
+(`READY`, `CONNECTING`, `GENERATING`, `DONE`, `CANCELLED`, `WARNING`,
+`ERROR`) and the input line. Below 40x12 a "Terminal too small" notice is
+shown until the window is larger again; nothing typed is lost.
+
+- **Keys:** typing (UTF-8, e.g. `Grüß Gott`), Left/Right, Home/End,
+  Ctrl+A/Ctrl+E, Backspace/Delete, Ctrl+U, Enter; Up/Down and PgUp/PgDn
+  scroll; F1 help; Ctrl+D exits on empty input; Ctrl+C cancels a running
+  request, or exits with 130 when idle.
+- **Commands** are those of the plain chat (`/help`, `/reset`, `/cleanup`
+  with a `yes` confirmation on the next line, `/usage`, `/exit`).
+- **Requests run in the background:** typing, scrolling and resizing keep
+  working. With `--stream` the answer appears as it arrives (reasoning only
+  switches the status to `Thinking`); without it the status shows
+  `GENERATING | Waiting for the complete response`. While a response is
+  generated, Enter keeps your text and shows a warning, Ctrl+D does
+  nothing, F1 / `/help` / `/usage` work, and `/exit` cancels and exits.
+- **Ctrl+C during a request** marks it `CANCELLED`, keeps the partial text
+  visible (never saved or sent again) and closes the connection in the
+  background.
+- **F2–F6** open the settings menus (below). `COST (EST.)` shows the
+  conversation's [estimated cost](#estimated-cost): `$0.000259`, `~$…`
+  (on assumptions), `>=$…` (some requests could not be priced),
+  `unavailable`, `$0 (local)`, or `-` before the first request.
+- **The terminal is always restored** (also after Ctrl+C, errors,
+  internal failures, SIGTERM and SIGHUP; a running request is then
+  cancelled and not saved). Only an uncatchable SIGKILL (or a crash of the
+  terminal itself) can leave it in fullscreen mode; type `reset` then. `--transcript-on-exit` then prints the committed
+  conversation to stdout (`YOU > …` / `AI > …`, blank lines between).
+- `--usage` applies to the one-shot and plain modes; the fullscreen UI
+  shows usage in its panel and with `/usage`.
+
+#### Settings menus (F2–F6)
+
+| Key | Menu | Effect |
+|---|---|---|
+| F2 | `SELECT <PROVIDER> MODEL` | the current provider's models (Ollama: local chat models with size/quantization, never cloud models; OpenAI: text models from the Models API), loaded once per run |
+| F3 | `SELECT PROVIDER` | OpenAI or Ollama; switching first checks the provider (`CONNECTING \| Checking <Label>`: OpenAI needs `OPENAI_API_KEY` and an answering Models API, Ollama a server with a local model) and then uses its default model |
+| F4 | `REASONING` | the model's confirmed values (OpenAI table, Ollama `/api/show`); `Model default` sends no parameter; `Off`/`On` for Ollama thinking models |
+| F5 | `MAX OUTPUT TOKENS` | `Default`, 256–4096 (within the model's known limit) or `Custom...`, typed at a `TOKENS >` prompt (Esc cancels) |
+| F6 | `ANSWER STYLE` | Brief, Normal or Detailed (for every provider and model) |
+
+In a menu: Up/Down, PgUp/PgDn, Home/End move, Enter selects, Esc or Ctrl+D
+closes it unchanged, Ctrl+C exits (130). Nothing typed reaches the input
+line, and a draft you had typed is kept. Menus never open while a response
+is generated or a cancelled one is still closing.
+
+- **F2/F3 switch conversations:** every provider/model has its own. The
+  target's conversation comes back (from this run, else the latest saved
+  one, which is not rewritten), or a new one starts:
+  `Now using Ollama / llama3.2:3b. Restored its conversation (4 messages).`
+  Messages are never sent to another model. If the check fails
+  (`OpenAI is not available: …`), nothing changes. Ctrl+C cancels a check
+  or model discovery (`Cancelled.`); a late answer is ignored.
+- **F4–F6 apply from the next message** and keep the conversation. Each
+  confirmed change is saved at once in `settings.json` (per model for
+  reasoning and max tokens, globally for the answer style), in the Python
+  edition's format: `"reasoning": "default"` for Model default and
+  `"max_output_tokens": null` for Default. Cancelling a menu or choosing
+  the value that is already saved writes nothing. A choice replaces the
+  matching command-line flag for the rest of the run.
+- **Thinking off for good:** a saved `"reasoning": "on"` beats the built-in
+  Off; choose F4 → Off once to save Off.
+- **`--no-history` affects conversations only:** switching stays in memory
+  (no conversation or `active.json` file is touched), but F4–F6 choices
+  are still saved in `settings.json`.
+- If `settings.json` could not be read at startup it is never overwritten:
+  a change then applies for this run only, with
+  `Warning: Settings not saved: …`. A failed save is a warning too.
+
+#### Plain chat
+
+```text
+NeuroBräu Go CLI 0.4.0-dev
 Provider: openai | Model: gpt-6-luna
 Type /help for commands, /exit to quit.
 
@@ -149,7 +313,7 @@ answer.
 | `/help` | commands and keys |
 | `/reset` | start a new conversation; the previous one stays saved (an empty conversation is reused) |
 | `/cleanup` | delete all saved conversations after you type `yes` (any other answer, EOF or Ctrl+C cancels) |
-| `/usage` | the conversation's token usage as reported by the API (no cost estimate yet) |
+| `/usage` | the conversation's token usage as reported by the API and its [estimated cost](#estimated-cost) |
 | `/exit` | leave the chat (exit code 0) |
 | any other `/word` | `Unknown command: /word. Type /help for commands.` |
 | Ctrl+D (EOF) / Ctrl+C at the prompt | exit with code 0 / 130 |
@@ -159,6 +323,52 @@ Commands are a single word starting with `/` or `\` (`\reset` works too),
 in any case; `/usr/bin is what?` is an ordinary message. Input is read
 line by line: there is no in-app line editing or input history beyond
 what the terminal itself offers.
+
+#### Estimated cost
+
+`/usage` (in both chats) and the panel's `COST (EST.)` price the
+conversation's usage records with a small catalog verified on OpenAI's
+pricing pages on **2026-10-22** (USD per 1M tokens):
+
+| Model | Input | Cached input | Cache write | Output |
+|---|---:|---:|---:|---:|
+| `gpt-6-luna`, ≤ 272K input tokens | 0.10 | 0.01 | 0.125 | 0.50 |
+| `gpt-6-luna`, > 272K input tokens (whole request) | 0.20 | 0.02 | 0.25 | 0.75 |
+| `gpt-5.1` | 1.25 | 0.125 | as input | 10.00 |
+
+```text
+Conversation usage (1 request(s), as reported by the API):
+Input tokens: 2,500
+  of which cached: 1,600
+  of which cache writes: 100
+Output tokens: 300
+  of which reasoning: 50
+Total tokens: 2,800
+Latest request input: 2,500 tokens (the whole history is sent, and billed, with every request)
+Estimated cost: $0.000259 (ESTIMATED, not a billed amount; pricing 2026-10-22)
+```
+
+- **These are estimates, not billed amounts.** Your OpenAI invoice is
+  authoritative; prices change, and this catalog is not updated live.
+- Only reported token counts are used; nothing is estimated from text.
+  Reasoning tokens are part of the output and are not charged twice;
+  cached input and cache writes are priced as parts of the input.
+- Service tiers scale the price (`gpt-6-luna`: flex and batch 50%, fast /
+  priority 2x; `gpt-5.1`: default only). When the tier or the cache counts
+  are not reported, the estimate is computed on stated assumptions and
+  marked *approximately* (`~`); the reasons are listed in `/usage`.
+- Other models, unpriced tiers, missing input/output counts, Ollama cloud
+  models (`:cloud`, `-cloud`) and other providers are `unavailable`; a
+  conversation with some such requests shows a lower bound (`at least`,
+  `>=`).
+- Local Ollama models have **$0 API cost** (`API cost: $0 (local Ollama
+  inference)`) — that is no charge from an API provider, not free
+  electricity or hardware.
+- Every request re-sends the whole history, so earlier messages are billed
+  again; incomplete answers are billed too and counted. Costs are computed
+  when shown and never stored in conversation or settings files.
+- Amounts are exact; only the display rounds (half up, 6 decimals below
+  one cent, else 4). One-shot `--usage` prints token counts only.
 
 #### Conversation history
 
@@ -191,8 +401,8 @@ conversations.
 
 #### Settings in the chat
 
-`settings.json` (written by the Python edition's settings menus) is read at
-chat startup; the Go chat never writes it. For the active provider/model:
+`settings.json` (shared with the Python edition) is read at chat startup;
+only the fullscreen UI's F4–F6 write it. For the active provider/model:
 
 1. command-line flags (`--reasoning-effort`, `--max-output-tokens`,
    `--answer-style`) for this run only; a value the model does not support
@@ -244,7 +454,7 @@ file is left unchanged.
 | `--help`, `-h` | usage on stdout | 0 |
 | chat: `/exit`, Ctrl+D | — | 0 |
 | chat: Ctrl+C at the prompt | `Goodbye.` | 130 |
-| `--version` | `NeuroBräu Go CLI 0.1.0-dev` on stdout | 0 |
+| `--version` | `NeuroBräu Go CLI 0.4.0-dev` on stdout | 0 |
 | successful prompt (also a non-streaming answer cut off at the token limit) | answer on stdout; with `--usage`, usage on stderr | 0 |
 | `--stream` answer cut off (token limit, content filter) | partial answer; `neurobrau: warning: response incomplete: …` | 8 |
 | stdout closed by the reader (e.g. `\| head`) | — | 141 (SIGPIPE) |
@@ -256,12 +466,16 @@ file is left unchanged.
 | timeout | `neurobrau: error: …` | 6 |
 | connection failed | `neurobrau: error: …` | 7 |
 | Ctrl+C during a one-shot request or chat startup | `neurobrau: interrupted` | 130 |
+| SIGTERM / SIGHUP to the fullscreen UI | request cancelled, terminal restored | 143 / 129 |
+| SIGTERM / SIGHUP elsewhere | default: the process ends (no terminal state to restore) | 143 / 129 (by signal) |
 
 ## Requirements
 
 - Go 1.26 or newer (see `go.mod`)
-- One direct dependency: the official OpenAI Go SDK
-  (`github.com/openai/openai-go/v3`); no CGO
+- Direct dependencies: the official OpenAI Go SDK
+  (`github.com/openai/openai-go/v3`), `github.com/gdamore/tcell/v2` (the
+  fullscreen UI's terminal handling, with a simulation screen for tests)
+  and `golang.org/x/term` (terminal detection); no CGO
 
 ## Build, test, run
 
@@ -276,6 +490,31 @@ go vet ./...
 gofmt -l .        # must print nothing
 ```
 
+Optional parity checks against the read-only Python 0.3.0 sources (skipped
+unless `NEUROBRAU_PYTHON_SRC` is set; temp files only) compare storage
+formats, cost estimates and `/usage` text, and generation-settings
+resolution with Python's; see [`docs/parity.md`](docs/parity.md). Some
+import modules that need the reference's dependencies, so point
+`NEUROBRAU_PYTHON` at its virtual environment:
+
+```bash
+NEUROBRAU_PYTHON_SRC=$PWD/../llm-cli-python/src \
+NEUROBRAU_PYTHON=$PWD/../llm-cli-python/.venv/bin/python \
+  go test -count=1 -run Python ./...
+```
+
+To try the fullscreen UI by hand without touching your real history or
+settings, give it throwaway directories (this uses a local Ollama server,
+which costs nothing; nothing is installed or pulled):
+
+```bash
+d=$(mktemp -d)
+HOME=$d XDG_STATE_HOME=$d/state XDG_CONFIG_HOME=$d/config \
+  ./bin/neurobrau --provider ollama --stream --transcript-on-exit
+# F2 another model, F4 Off, F5 512, F6 Brief, Ctrl+D to quit, then:
+cat "$d/config/neurobrau/settings.json"; ls "$d/state/neurobrau/conversations"
+```
+
 ## Layout
 
 ```text
@@ -283,7 +522,11 @@ cmd/neurobrau/   thin entry point: passes os.Args, stdout, stderr to cli.Run
 internal/cli/    argument parsing, help, version, one-shot flow, chat startup,
                  exit codes
 internal/chat/   plain chat loop, commands, generation settings resolution,
-                 /usage report
+                 /usage report (shared by both chats)
+internal/pricing/ versioned pricing catalog, exact (math/big) cost estimates
+                 and their display forms
+internal/tui/    fullscreen UI: layout, wrapping, input editing, event loop,
+                 background requests and checks, F2-F6 menus (tcell)
 internal/session/ active conversation: context, commit, restore, reset,
                  switch/park, cleanup (no UI, no network)
 internal/llm/    provider-neutral types, Provider and StreamingProvider
@@ -292,8 +535,11 @@ internal/ollama/ Ollama provider over net/http (/api/tags, /api/show, /api/chat)
 internal/openai/ OpenAI provider over the official SDK (Responses API, Models API)
 internal/storage/ Python-compatible JSON files: conversations, usage records,
                  active.json, settings.json
-scripts/         development helpers (optional Python storage parity check)
+scripts/         development helpers (optional Python storage, pricing and
+                 settings-resolution parity checks)
 docs/tui-spec.md authoritative, language-neutral specification (do not edit)
+docs/parity.md   differences from Python 0.3.0 and how they are checked
+docs/release-checklist.md  verification and owner-only release steps
 AGENTS.md        instructions for coding agents working on this repository
 ```
 
@@ -307,11 +553,9 @@ the API, the Python fixtures and the optional parity checks.
 
 ## Roadmap (future — not implemented)
 
-1. Streaming in the interactive chat — Task 004B.
-2. Fullscreen retro TUI with provider/model menus and settings controls
-   (F2–F6) — Task 005. The session layer already supports switching and
-   parking conversations per provider/model.
-3. Estimated cost in `/usage` (pricing catalog).
+1. Release 0.4.0 after the owner's review ([checklist](docs/release-checklist.md)).
+2. A TypeScript edition with the same observable contracts.
+3. Pricing catalog refreshes as separate, reviewed changes.
 
 Anthropic support, LangChain/LangGraph, RAG, vector databases and autonomous
 agents are out of scope for Phase 1.

@@ -108,3 +108,32 @@ func (t *IdleTimer) Stop() {
 	defer t.mu.Unlock()
 	t.timer.Stop()
 }
+
+// StreamBuffer is the capacity of the channel StreamChannel returns.
+const StreamBuffer = 64
+
+// StreamChannel iterates events in one worker goroutine and delivers them
+// on a bounded channel, for a consumer that must also wait for other
+// things (Ctrl+C, a UI loop). The worker never does anything but forward
+// events; the consumer owns all output and state changes.
+//
+// Every send also selects on ctx.Done(), so canceling ctx unblocks the
+// worker even when the channel is full; the worker then stops iterating,
+// which closes the stream and its connection. The channel is closed when
+// the worker ends. To end a request early, the consumer cancels ctx and
+// receives until the channel is closed: after that, nothing of the
+// request is left running and nothing more can arrive.
+func StreamChannel(ctx context.Context, events iter.Seq[StreamEvent]) <-chan StreamEvent {
+	ch := make(chan StreamEvent, StreamBuffer)
+	go func() {
+		defer close(ch)
+		for event := range events {
+			select {
+			case ch <- event:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch
+}

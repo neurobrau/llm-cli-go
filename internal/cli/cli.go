@@ -27,7 +27,7 @@ const (
 	ProgName = "neurobrau"
 	// Version is the Go edition's own version. It does not imply feature
 	// parity with the Python reference implementation (0.3.0).
-	Version = "0.1.0-dev"
+	Version = "0.4.0-dev"
 )
 
 // Exit codes (docs/tui-spec.md, section 16). Provider failures use the
@@ -46,7 +46,7 @@ var providers = []string{"openai", "ollama"}
 const helpText = `usage: neurobrau [-h] [--version] [--provider PROVIDER] [--model MODEL_ID]
                  [--reasoning-effort EFFORT] [--max-output-tokens N]
                  [--answer-style STYLE] [--usage] [--stream] [--plain]
-                 [--no-history]
+                 [--no-history] [--transcript-on-exit]
                  [prompt]
 
 NeuroBräu Go CLI — educational multi-provider LLM command-line client.
@@ -75,24 +75,30 @@ options:
   --answer-style STYLE       brief, normal or detailed answers (default: in a
                              chat the saved choice, else normal)
   --usage                    print token usage to stderr after each response
-  --stream                   print a one-shot answer while it is generated
-                             (not yet in the interactive chat)
-  --plain                    use the line-oriented chat (currently the only
-                             interactive mode)
+  --stream                   show answers while they are generated (one-shot,
+                             plain and fullscreen chat)
+  --plain                    use the line-oriented chat instead of the
+                             fullscreen UI
   --no-history               do not load or save conversation history for
                              this run
+  --transcript-on-exit       fullscreen UI: print the conversation after the
+                             terminal is restored
 
-Development version ` + Version + `: one-shot prompts (optionally streamed)
-and a non-streaming plain line-oriented chat that saves conversations.
-Without a prompt the plain chat starts (temporary until the fullscreen UI
-exists).
+Development version ` + Version + `: one-shot prompts and an interactive
+chat that saves conversations, both optionally streamed. Without a prompt,
+the fullscreen UI starts when stdin and stdout are terminals and TERM is
+set (not dumb); otherwise, or with --plain, the line-oriented chat starts.
 OpenAI reads its API key from the OPENAI_API_KEY environment variable;
 Ollama uses OLLAMA_HOST (default http://127.0.0.1:11434) and needs no key.
-Not implemented yet: streaming in the chat, the fullscreen UI, changing
-settings in a chat and estimated costs.
+In the fullscreen UI, F2/F3 switch model and provider and F4-F6 change
+reasoning, max output tokens and answer style; F4-F6 choices are saved in
+settings.json (also with --no-history). /usage shows the conversation's
+token usage and its ESTIMATED API cost (not a billed amount).
 
 examples:
-  neurobrau --plain
+  neurobrau
+  neurobrau --stream --transcript-on-exit
+  neurobrau --plain --stream --usage
   neurobrau "What is a neural network?"
   neurobrau --provider ollama --model qwen3.5:4b "Hello"
   neurobrau --reasoning-effort high --answer-style brief --usage "Hello"
@@ -107,6 +113,11 @@ type Streams struct {
 	// request is canceled by the first one; the chat cancels its running
 	// request or exits when idle.
 	Interrupts <-chan os.Signal
+	// WatchTerminations, if set, starts delivering SIGTERM and SIGHUP to c
+	// and returns a function that stops it. Only the fullscreen UI watches
+	// them, to restore the terminal before it exits; elsewhere they keep
+	// their default effect.
+	WatchTerminations func(c chan<- os.Signal) (stop func())
 }
 
 // Run parses args (without the program name), runs a one-shot prompt or
@@ -132,11 +143,7 @@ func Run(ctx context.Context, args []string, s Streams) int {
 	if err := opts.validate(); err != nil {
 		return usageError(stderr, err.Error())
 	}
-	if len(opts.positional) == 0 && opts.stream {
-		return usageError(stderr, "--stream needs a prompt: streaming in the interactive chat is not implemented yet")
-	}
 	if len(opts.positional) == 0 {
-		// No fullscreen UI yet: every interactive start is the plain chat.
 		return runInteractive(ctx, opts, s)
 	}
 	ctx, stop := cancelOnInterrupt(ctx, s.Interrupts)
@@ -179,6 +186,7 @@ type options struct {
 	plain      bool
 	stream     bool
 	noHistory  bool
+	transcript bool
 	provider   string
 	model      string
 	reasoning  optionalString
@@ -215,6 +223,7 @@ func parseArgs(args []string) (options, error) {
 	fs.BoolVar(&opts.plain, "plain", false, "")
 	fs.BoolVar(&opts.stream, "stream", false, "")
 	fs.BoolVar(&opts.noHistory, "no-history", false, "")
+	fs.BoolVar(&opts.transcript, "transcript-on-exit", false, "")
 	fs.StringVar(&opts.provider, "provider", "", "")
 	fs.StringVar(&opts.model, "model", "", "")
 	fs.Var(&opts.reasoning, "reasoning-effort", "")

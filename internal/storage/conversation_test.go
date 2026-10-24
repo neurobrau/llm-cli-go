@@ -258,6 +258,7 @@ func TestUsageRecords(t *testing.T) {
 	     "cached_input_tokens": 600, "cache_write_tokens": 100, "reasoning_tokens": 50, "unknown": 1},
 	    {"at": "2026-10-22T05:55:00+02:00", "provider": "ollama", "model": "m", "output_tokens": 0},
 	    {"at": "2026-10-22T05:56:00Z", "provider": "ollama", "model": "m", "status": "incomplete", "input_tokens": 7, "service_tier": null},
+	    {"at": "2026-10-22T05:56:30Z", "provider": "openai", "model": "gpt-6-luna", "service_tier": "", "input_tokens": 9},
 	    {"at": "2026-10-22T05:57:00Z", "provider": "ollama", "model": "m", "input_tokens": -1},
 	    {"at": "2026-10-22T05:57:00Z", "provider": "ollama", "model": "m", "input_tokens": 1.5},
 	    {"at": "2026-10-22T05:57:00Z", "provider": "ollama", "model": "m", "input_tokens": true},
@@ -283,6 +284,8 @@ func TestUsageRecords(t *testing.T) {
 			Usage: llm.Usage{OutputTokens: intp(0)}}, // zero is reported, the rest is not
 		{At: mustTime(t, "2026-10-22T05:56:00Z"), Provider: "ollama", Model: "m", Status: StatusIncomplete,
 			Usage: llm.Usage{InputTokens: intp(7)}},
+		{At: mustTime(t, "2026-10-22T05:56:30Z"), Provider: "openai", Model: "gpt-6-luna", Status: StatusCompleted,
+			EmptyServiceTier: true, Usage: llm.Usage{InputTokens: intp(9)}}, // an empty tier is not an absent one
 	}
 	if !reflect.DeepEqual(c.Requests, want) {
 		t.Errorf("requests:\n got %+v\nwant %+v", c.Requests, want)
@@ -304,6 +307,8 @@ func TestUsageRecords(t *testing.T) {
 			"cached_input_tokens": 600.0, "cache_write_tokens": 100.0, "reasoning_tokens": 50.0},
 		{"at": "2026-10-22T03:55:00.000Z", "provider": "ollama", "model": "m", "status": "completed", "output_tokens": 0.0},
 		{"at": "2026-10-22T05:56:00.000Z", "provider": "ollama", "model": "m", "status": "incomplete", "input_tokens": 7.0},
+		{"at": "2026-10-22T05:56:30.000Z", "provider": "openai", "model": "gpt-6-luna", "status": "completed",
+			"service_tier": "", "input_tokens": 9.0},
 	}
 	if !reflect.DeepEqual(back.Requests, wantJSON) {
 		t.Errorf("written requests:\n got %v\nwant %v", back.Requests, wantJSON)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/neurobrau/llm-cli-go/internal/cli"
 )
@@ -24,5 +25,9 @@ func run() int {
 		Stdout:     os.Stdout,
 		Stderr:     os.Stderr,
 		Interrupts: interrupts,
+		WatchTerminations: func(c chan<- os.Signal) func() {
+			signal.Notify(c, syscall.SIGTERM, syscall.SIGHUP)
+			return func() { signal.Stop(c) }
+		},
 	})
 }

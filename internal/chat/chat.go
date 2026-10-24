@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"os"
 	"strings"
 	"unicode"
@@ -20,10 +21,12 @@ const (
 	AIPrefix   = "AI > "
 )
 
-// Exit codes of the chat (docs/tui-spec.md, section 9).
+// Exit codes of the chat (docs/tui-spec.md, sections 9 and 16).
 const (
 	ExitOK          = 0
+	ExitError       = 1
 	ExitInterrupted = 130
+	ExitBrokenPipe  = 141 // stdout closed by the reader
 )
 
 // HelpText is the /help output.
@@ -31,22 +34,68 @@ const HelpText = `Commands:
   /help     show this help
   /reset    start a new conversation (the previous one stays saved)
   /cleanup  delete all saved conversations (asks for confirmation)
-  /usage    token usage of this conversation, as reported by the API
+  /usage    token usage and ESTIMATED cost of this conversation
   /exit     exit the chat (the conversation stays saved)
 Backslash aliases also work: \help, \reset, \cleanup, \usage, \exit.
 Press Ctrl+D (EOF) or Ctrl+C at the prompt to exit.
 Ctrl+C while waiting for an answer cancels the request.`
 
+// Notices shared by the plain chat and the fullscreen UI.
+const (
+	CleanupWithoutHistory = "Conversation history is disabled for this session (--no-history)."
+	NoSavedConversations  = "No saved conversations."
+	CleanupCancelled      = "Cleanup cancelled. Nothing was deleted."
+)
+
 const cleanupConfirmation = "yes"
+
+// RestoredNotice is the startup notice for a restored conversation; "" if
+// none was restored.
+func RestoredNotice(s *session.Session) string {
+	if !s.Restored() {
+		return ""
+	}
+	conv := s.Conversation()
+	return fmt.Sprintf("Restored conversation from %s (%d messages). Type /reset to start a new one.",
+		conv.UpdatedAt.Local().Format("2006-01-02 15:04"), len(conv.Messages))
+}
+
+// ResetNotice is shown after /reset.
+func ResetNotice(persistent bool) string {
+	if persistent {
+		return "Started a new conversation. The previous one stays saved."
+	}
+	return "Conversation history cleared."
+}
+
+// CleanupPrompt asks to confirm deleting count saved conversations.
+func CleanupPrompt(count int, dir string) string {
+	return fmt.Sprintf("Delete %d saved conversation(s) in %s? This cannot be undone. Type '%s' to confirm: ",
+		count, dir, cleanupConfirmation)
+}
+
+// CleanupConfirmed reports whether answer confirms the cleanup: only
+// "yes", ignoring case and surrounding spaces.
+func CleanupConfirmed(answer string) bool {
+	return strings.ToLower(strings.TrimSpace(answer)) == cleanupConfirmation
+}
+
+// CleanupDone reports deleted saved conversations.
+func CleanupDone(deleted int) string {
+	return fmt.Sprintf("Deleted %d saved conversation(s). Started a new conversation.", deleted)
+}
 
 // Config is what Run needs. Session and Reply are required.
 type Config struct {
-	// Title is the first banner line, e.g. "NeuroBräu Go CLI 0.1.0-dev".
+	// Title is the first banner line, e.g. "NeuroBräu Go CLI 0.4.0-dev".
 	Title   string
 	Session *session.Session
 	// Reply sends the context and returns the final answer (normally
 	// Engine.Reply). Run makes at most one call at a time.
 	Reply func(ctx context.Context, messages []llm.Message) (llm.Response, error)
+	// Stream, if set, is used instead of Reply: answers are printed as
+	// they arrive (--stream; normally Engine.Stream).
+	Stream func(ctx context.Context, messages []llm.Message) iter.Seq[llm.StreamEvent]
 	// Warnings are shown after the banner (storage, settings, notices).
 	Warnings  []string
 	ShowUsage bool // --usage: print token usage after each answer
@@ -93,7 +142,11 @@ func Run(ctx context.Context, cfg Config) int {
 			}
 			continue
 		}
-		if !c.send(ctx, text) {
+		if c.Stream != nil {
+			if code, quit := c.sendStream(ctx, text); quit {
+				return code
+			}
+		} else if !c.send(ctx, text) {
 			fmt.Fprintln(c.Stdout, "\nGoodbye.")
 			return ExitInterrupted
 		}
@@ -119,10 +172,8 @@ func (c *chat) printBanner() {
 	for _, w := range c.Warnings {
 		c.warn(w)
 	}
-	if c.Session.Restored() {
-		conv := c.Session.Conversation()
-		fmt.Fprintf(c.Stdout, "Restored conversation from %s (%d messages). Type /reset to start a new one.\n\n",
-			conv.UpdatedAt.Local().Format("2006-01-02 15:04"), len(conv.Messages))
+	if notice := RestoredNotice(c.Session); notice != "" {
+		fmt.Fprintf(c.Stdout, "%s\n\n", notice)
 	}
 }
 
@@ -189,11 +240,7 @@ func (c *chat) command(ctx context.Context, name string) bool {
 		fmt.Fprintln(c.Stdout, HelpText)
 	case "reset":
 		err := c.Session.Reset()
-		if c.Session.Persistent() {
-			fmt.Fprintln(c.Stdout, "Started a new conversation. The previous one stays saved.")
-		} else {
-			fmt.Fprintln(c.Stdout, "Conversation history cleared.")
-		}
+		fmt.Fprintln(c.Stdout, ResetNotice(c.Session.Persistent()))
 		if err != nil {
 			c.warn(err.Error())
 		}
@@ -211,7 +258,7 @@ func (c *chat) command(ctx context.Context, name string) bool {
 // confirms it with "yes". That line is never sent or run as a command.
 func (c *chat) cleanup(ctx context.Context) {
 	if !c.Session.Persistent() {
-		fmt.Fprintln(c.Stdout, "Conversation history is disabled for this session (--no-history).")
+		fmt.Fprintln(c.Stdout, CleanupWithoutHistory)
 		return
 	}
 	count, err := c.Session.SavedCount()
@@ -220,17 +267,15 @@ func (c *chat) cleanup(ctx context.Context) {
 		return
 	}
 	if count == 0 {
-		fmt.Fprintln(c.Stdout, "No saved conversations.")
+		fmt.Fprintln(c.Stdout, NoSavedConversations)
 		return
 	}
-	prompt := fmt.Sprintf("Delete %d saved conversation(s) in %s? This cannot be undone. Type '%s' to confirm: ",
-		count, c.Session.HistoryDir(), cleanupConfirmation)
-	answer, status := c.readLine(ctx, prompt)
+	answer, status := c.readLine(ctx, CleanupPrompt(count, c.Session.HistoryDir()))
 	if status != inputOK {
 		fmt.Fprintln(c.Stdout) // EOF or Ctrl+C cancel
 	}
-	if strings.ToLower(strings.TrimSpace(answer)) != cleanupConfirmation {
-		fmt.Fprintln(c.Stdout, "Cleanup cancelled. Nothing was deleted.")
+	if !CleanupConfirmed(answer) {
+		fmt.Fprintln(c.Stdout, CleanupCancelled)
 		return
 	}
 	deleted, err := c.Session.Cleanup()
@@ -238,7 +283,7 @@ func (c *chat) cleanup(ctx context.Context) {
 		c.printError(err.Error())
 		return
 	}
-	fmt.Fprintf(c.Stdout, "Deleted %d saved conversation(s). Started a new conversation.\n", deleted)
+	fmt.Fprintln(c.Stdout, CleanupDone(deleted))
 }
 
 type reply struct {

@@ -157,14 +157,6 @@ func TestStreamOpenAIErrorCodes(t *testing.T) {
 	})
 }
 
-func TestStreamWithoutPrompt(t *testing.T) {
-	startFakeOpenAI(t, openAIReply(200, openAIAnswer))
-	code, stdout, stderr := chatRun(t, "Hi\n", "--stream")
-	if code != ExitUsage || stdout != "" || !strings.Contains(stderr, "--stream needs a prompt") {
-		t.Errorf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
-	}
-}
-
 // signalWriter records writes and signals the first one.
 type signalWriter struct {
 	mu    sync.Mutex

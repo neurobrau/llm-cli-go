@@ -86,6 +86,14 @@ type Model struct {
 	ContextLength int      // 0: unknown
 }
 
+// AvailabilityChecker is a Provider that can check whether it can be used
+// right now (credentials present, service reachable, a model to use), e.g.
+// before the fullscreen UI switches to it.
+type AvailabilityChecker interface {
+	// CheckAvailability returns why the provider cannot be used, or nil.
+	CheckAvailability(ctx context.Context) error
+}
+
 // Provider is what the CLI needs from an LLM provider. Every error a method
 // returns is either an *Error or wraps context.Canceled.
 type Provider interface {

@@ -24,6 +24,7 @@ func TestResolveReasoning(t *testing.T) {
 		{"unsupported effort", gpt5, "none", Reasoning{}, "m supports reasoning: Minimal, Low, Medium, High; 'none' is not available."},
 		{"xhigh label", ReasoningSupport{Values: []string{"xhigh"}, Known: true}, "low", Reasoning{}, "m supports reasoning: XHigh; 'low' is not available."},
 		{"none without reasoning", noReasoning, "none", Reasoning{Explicit: true}, ""},
+		{"off without reasoning", noReasoning, "off", Reasoning{Explicit: true}, ""}, // as in the Python edition
 		{"effort without reasoning", noReasoning, "high", Reasoning{}, "m does not support reasoning; 'high' is not available."},
 		{"unknown model passes through", unknown, "max", Reasoning{Effort: "max", Explicit: true}, ""},
 		{"unknown model, model default", unknown, "model-default", Reasoning{Explicit: true}, ""},

@@ -93,6 +93,7 @@ type harness struct {
 	stderr     *syncBuffer
 	showUsage  bool
 	warnings   []string
+	stream     *fakeStream // nil: non-streaming
 }
 
 func newHarness(t *testing.T, history bool, replies ...func(context.Context) (llm.Response, error)) *harness {
@@ -111,10 +112,14 @@ func (h *harness) run(ctx context.Context, input string) int {
 		h.stdin = strings.NewReader(input)
 	}
 	engine := &Engine{Provider: h.provider, Model: "gpt-6-luna", Settings: Settings{AnswerStyle: "brief", MaxOutputTokens: 50}}
-	return Run(ctx, Config{
+	cfg := Config{
 		Title: "NeuroBräu Go CLI test", Session: h.session, Reply: engine.Reply, Warnings: h.warnings,
 		ShowUsage: h.showUsage, Stdin: h.stdin, Stdout: h.stdout, Stderr: h.stderr, Interrupts: h.interrupts,
-	})
+	}
+	if h.stream != nil {
+		cfg.Stream = h.stream.Stream
+	}
+	return Run(ctx, cfg)
 }
 
 const banner = "NeuroBräu Go CLI test\nProvider: openai | Model: gpt-6-luna\nType /help for commands, /exit to quit.\n\n"
@@ -229,7 +234,10 @@ func TestCommands(t *testing.T) {
 		"Unknown command: /nope. Type /help for commands.\nYOU > Unknown command: /nope. Type /help for commands.\n",
 		"YOU > AI > About /usr/bin\n",
 		"Conversation usage (1 request(s), as reported by the API):\nInput tokens: 1\nOutput tokens: 1\nTotal tokens: 2\n" +
-			"Latest request input: 1 tokens (the whole history is sent, and billed, with every request)\n" + CostNote + "\n",
+			"Latest request input: 1 tokens (the whole history is sent, and billed, with every request)\n" +
+			"Estimated cost: approximately $0.000001 (ESTIMATED, not a billed amount; pricing 2026-10-22; Standard tier assumed " +
+			"(tier not reported); cached tokens not reported (all input priced as uncached); cache writes not reported " +
+			"(priced as ordinary input))\n",
 		"YOU > Conversation history cleared.\nYOU > Token usage: no API requests in this conversation yet.\nYOU > Goodbye.\n",
 	} {
 		if !strings.Contains(out, want) {

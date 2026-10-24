@@ -151,3 +151,58 @@ func TestIdleTimer(t *testing.T) {
 	default:
 	}
 }
+
+// TestStreamChannelCancelUnblocksAFullQueue fills the bounded channel
+// without reading it; canceling must stop the blocked producer, end the
+// iteration (closing its stream) and close the channel.
+func TestStreamChannelCancelUnblocksAFullQueue(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var produced atomic.Int64
+	finished := make(chan struct{})
+	full := make(chan struct{})
+	events := func(yield func(llm.StreamEvent) bool) {
+		defer close(finished) // the stream's connection would close here
+		for i := 0; ; i++ {
+			if i == llm.StreamBuffer {
+				close(full) // the channel is full and the next send blocks
+			}
+			if !yield(llm.TextDelta{Text: "x"}) {
+				return
+			}
+			produced.Add(1)
+		}
+	}
+	ch := llm.StreamChannel(ctx, events)
+	<-full
+	cancel()
+	<-finished
+	n := 0
+	for range ch { // closed after the worker ended
+		n++
+	}
+	if n > llm.StreamBuffer || produced.Load() > llm.StreamBuffer+1 {
+		t.Errorf("received %d, produced %d", n, produced.Load())
+	}
+}
+
+func TestStreamChannelDeliversInOrder(t *testing.T) {
+	var want []llm.StreamEvent
+	for i := range 200 { // more than the buffer
+		want = append(want, llm.TextDelta{Text: string(rune('a' + i%26))})
+	}
+	want = append(want, llm.StreamCompleted{})
+	events := func(yield func(llm.StreamEvent) bool) {
+		for _, e := range want {
+			if !yield(e) {
+				return
+			}
+		}
+	}
+	var got []llm.StreamEvent
+	for e := range llm.StreamChannel(context.Background(), events) {
+		got = append(got, e)
+	}
+	if len(got) != len(want) || got[len(got)-1] != want[len(want)-1] || got[5] != want[5] {
+		t.Errorf("got %d events", len(got))
+	}
+}

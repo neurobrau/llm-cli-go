@@ -7,6 +7,7 @@ package chat
 
 import (
 	"context"
+	"iter"
 
 	"github.com/neurobrau/llm-cli-go/internal/llm"
 )
@@ -36,4 +37,16 @@ func (e *Engine) Request(messages []llm.Message) llm.Request {
 // Reply sends messages and returns the final answer.
 func (e *Engine) Reply(ctx context.Context, messages []llm.Message) (llm.Response, error) {
 	return e.Provider.Chat(ctx, e.Request(messages))
+}
+
+// Stream sends messages like Reply and returns the answer as stream
+// events. A provider without streaming support yields a StreamFailed.
+func (e *Engine) Stream(ctx context.Context, messages []llm.Message) iter.Seq[llm.StreamEvent] {
+	p, ok := e.Provider.(llm.StreamingProvider)
+	if !ok {
+		return func(yield func(llm.StreamEvent) bool) {
+			yield(llm.StreamFailed{Err: &llm.Error{Kind: llm.KindAPI, Message: e.Provider.Name() + " does not support streaming."}})
+		}
+	}
+	return p.Stream(ctx, e.Request(messages))
 }

@@ -86,7 +86,7 @@ func ResolveReasoning(model string, support ReasoningSupport, requested string) 
 		return Reasoning{Explicit: true}, nil
 	case !support.Known:
 		return Reasoning{Effort: requested, Explicit: true}, nil // support unknown: let the API decide
-	case len(support.Values) == 0 && requested == "none":
+	case len(support.Values) == 0 && (requested == "none" || requested == "off"):
 		return Reasoning{Explicit: true}, nil // "no reasoning" on a model without it: send nothing
 	}
 	if mapped := mapReasoning(support.Values, requested); mapped != "" {

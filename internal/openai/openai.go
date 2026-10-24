@@ -165,6 +165,13 @@ func (p *Provider) ListModels(ctx context.Context) ([]llm.Model, error) {
 	return p.models, nil
 }
 
+// CheckAvailability reports a missing API key or a Models API failure; it
+// reuses the cached model list.
+func (p *Provider) CheckAvailability(ctx context.Context) error {
+	_, err := p.ListModels(ctx)
+	return err
+}
+
 func isTextModel(id string) bool {
 	for _, marker := range nonTextModelMarkers {
 		if strings.Contains(id, marker) {

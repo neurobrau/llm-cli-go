@@ -61,7 +61,7 @@ func TestHelp(t *testing.T) {
 				t.Errorf("stdout does not start with usage line:\n%s", stdout)
 			}
 			for _, want := range []string{"--help", "--version", "--provider", "--model", "openai or ollama (default: openai;", "--plain", "--no-history", "omit to",
-				"gpt-6-luna", "OPENAI_API_KEY", "OLLAMA_HOST", "Not implemented yet:"} {
+				"gpt-6-luna", "OPENAI_API_KEY", "OLLAMA_HOST", "ESTIMATED API cost (not a billed amount)"} {
 				if !strings.Contains(stdout, want) {
 					t.Errorf("help text missing %q:\n%s", want, stdout)
 				}
@@ -87,7 +87,7 @@ func TestVersion(t *testing.T) {
 	if code != ExitOK {
 		t.Errorf("exit code = %d, want %d", code, ExitOK)
 	}
-	if want := "NeuroBräu Go CLI 0.1.0-dev\n"; stdout != want {
+	if want := "NeuroBräu Go CLI 0.4.0-dev\n"; stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 	if stderr != "" {
@@ -157,7 +157,9 @@ func startFakeOllama(t *testing.T, tags string, chat http.HandlerFunc) *fakeOlla
 }
 
 // startFakeOllamaWithShow also answers /api/show with shows[model]; a model
-// without an entry fails the test.
+// without an entry fails the test. With nil shows, every model is shown
+// without thinking metadata (the interactive chat looks up the support of
+// its model at startup).
 func startFakeOllamaWithShow(t *testing.T, tags string, shows map[string]string, chat http.HandlerFunc) *fakeOllama {
 	t.Helper()
 	isolateEnv(t)
@@ -170,6 +172,9 @@ func startFakeOllamaWithShow(t *testing.T, tags string, shows map[string]string,
 			var body struct{ Model string }
 			json.NewDecoder(r.Body).Decode(&body)
 			show, ok := shows[body.Model]
+			if shows == nil {
+				show, ok = `{"capabilities":["completion"]}`, true
+			}
 			if !ok {
 				t.Errorf("unexpected /api/show for %q", body.Model)
 			}

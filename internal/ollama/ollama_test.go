@@ -536,3 +536,23 @@ func TestCancellation(t *testing.T) {
 		t.Errorf("cancellation reported as provider error %v", e)
 	}
 }
+
+func TestCheckAvailability(t *testing.T) {
+	s := newFakeServer(t, map[string]http.HandlerFunc{"GET /api/tags": reply(200, tagsJSON(cloudTag, localQwen))})
+	p := s.provider()
+	if err := p.CheckAvailability(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CheckAvailability(context.Background()); err != nil || len(s.requestsTo("/api/tags")) != 2 {
+		t.Errorf("err %v; %d /api/tags requests, want 2 (the check reloads)", err, len(s.requestsTo("/api/tags")))
+	}
+
+	cloudOnly := newFakeServer(t, map[string]http.HandlerFunc{"GET /api/tags": reply(200, tagsJSON(cloudTag, cloudDash))})
+	if err := cloudOnly.provider().CheckAvailability(context.Background()); !errors.Is(err, ErrNoLocalModels) {
+		t.Errorf("cloud only: %v", err)
+	}
+	down := New(Config{BaseURL: "http://127.0.0.1:1"})
+	if err := down.CheckAvailability(context.Background()); kindOf(t, err) != llm.KindConnection {
+		t.Errorf("offline: %v", err)
+	}
+}

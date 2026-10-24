@@ -96,7 +96,7 @@ func messages(body map[string]any) []string {
 	return out
 }
 
-const chatBanner = "NeuroBräu Go CLI 0.1.0-dev\nProvider: openai | Model: gpt-6-luna\nType /help for commands, /exit to quit.\n\n"
+const chatBanner = "NeuroBräu Go CLI 0.4.0-dev\nProvider: openai | Model: gpt-6-luna\nType /help for commands, /exit to quit.\n\n"
 
 func TestInteractiveStartsWithoutPrompt(t *testing.T) {
 	for _, args := range [][]string{{}, {"--plain"}, {"--plain", "--no-history"}} {
@@ -142,6 +142,41 @@ func TestOneShotIgnoresSavedSettings(t *testing.T) {
 	}
 }
 
+// The reference example of docs/tui-spec.md, section 15, through the real
+// provider: the reported tier and cache details give an exact estimate.
+func TestInteractiveEstimatedCost(t *testing.T) {
+	startFakeOpenAI(t, openAIReply(200, `{"id":"resp_1","status":"completed","model":"gpt-6-luna",
+	 "service_tier":"default","output":[{"type":"message","role":"assistant",
+	 "content":[{"type":"output_text","text":"A neural network is a model."}]}],
+	 "usage":{"input_tokens":2500,"output_tokens":300,"total_tokens":2800,
+	  "input_tokens_details":{"cached_tokens":1600,"cache_write_tokens":100},
+	  "output_tokens_details":{"reasoning_tokens":50}}}`))
+	code, stdout, stderr := chatRun(t, "Hi\n/usage\n/exit\n")
+	want := `YOU > Conversation usage (1 request(s), as reported by the API):
+Input tokens: 2,500
+  of which cached: 1,600
+  of which cache writes: 100
+Output tokens: 300
+  of which reasoning: 50
+Total tokens: 2,800
+Latest request input: 2,500 tokens (the whole history is sent, and billed, with every request)
+Estimated cost: $0.000259 (ESTIMATED, not a billed amount; pricing 2026-10-22)
+YOU > Goodbye.
+`
+	if code != ExitOK || !strings.HasSuffix(stdout, want) || stderr != "" {
+		t.Errorf("code=%d stderr=%q stdout:\n%s", code, stderr, stdout)
+	}
+	// Costs are derived when shown, never stored.
+	files, _ := filepath.Glob(filepath.Join(statePaths(t).Conversations, "*.json"))
+	if len(files) != 1 {
+		t.Fatalf("saved %v", files)
+	}
+	data, _ := os.ReadFile(files[0])
+	if !strings.Contains(string(data), `"cache_write_tokens": 100`) || strings.Contains(string(data), "cost") {
+		t.Errorf("conversation file:\n%s", data)
+	}
+}
+
 func TestInteractiveOpenAIConversation(t *testing.T) {
 	f := startFakeOpenAI(t, openAIReply(200, openAIAnswer))
 	paths := statePaths(t)
@@ -153,7 +188,9 @@ func TestInteractiveOpenAIConversation(t *testing.T) {
 		t.Errorf("stdout %q", stdout)
 	}
 	if !strings.Contains(stdout, "Input tokens: 10\nOutput tokens: 14\nTotal tokens: 24\nLatest request input: 5 tokens") ||
-		!strings.HasSuffix(stdout, "Estimated cost: not implemented in the Go edition yet.\nYOU > Goodbye.\n") {
+		!strings.HasSuffix(stdout, "Estimated cost: approximately $0.000008 (ESTIMATED, not a billed amount; pricing 2026-10-22; "+
+			"Standard tier assumed (tier not reported); cached tokens not reported (all input priced as uncached); "+
+			"cache writes not reported (priced as ordinary input))\nYOU > Goodbye.\n") {
 		t.Errorf("usage report %q", stdout)
 	}
 	if stderr != strings.Repeat("Token usage: input=5, output=7, total=12\n", 2) {

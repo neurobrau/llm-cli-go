@@ -208,6 +208,8 @@ func fakeOllama(t *testing.T, chat http.HandlerFunc) *httptest.Server {
 		switch r.URL.Path {
 		case "/api/tags":
 			io.WriteString(w, `{"models":[{"model":"llama3.2:3b","capabilities":["completion"]}]}`)
+		case "/api/show":
+			io.WriteString(w, `{"capabilities":["completion"]}`)
 		case "/api/chat":
 			chat(w, r)
 		default:
@@ -351,5 +353,84 @@ func TestStreamBrokenPipe(t *testing.T) {
 	case <-closed:
 	case <-time.After(10 * time.Second):
 		t.Error("the connection stayed open")
+	}
+}
+
+// TestStreamingChatCtrlC sends real SIGINTs to a streaming chat: the first,
+// during an answer, cancels only that request (its connection closes);
+// the next question works with a clean context; the second SIGINT, at the
+// prompt, exits with 130.
+func TestStreamingChatCtrlC(t *testing.T) {
+	closed := make(chan struct{})
+	var mu sync.Mutex
+	var bodies []string
+	requests := 0
+	srv := fakeOllama(t, func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		requests++
+		n := requests
+		bodies = append(bodies, string(data))
+		mu.Unlock()
+		if n == 1 {
+			ollamaChunk(w, "Part")
+			<-r.Context().Done() // stalls until the client closes the connection
+			close(closed)
+			return
+		}
+		ollamaChunk(w, "Answer")
+		io.WriteString(w, `{"message":{"content":""},"done":true,"prompt_eval_count":3,"eval_count":1}`+"\n")
+	})
+	cmd := exec.Command(os.Args[0], "--provider", "ollama", "--model", "llama3.2:3b", "--stream")
+	cmd.Env = append(isolatedEnv(t), runMainEnv+"=1", "OLLAMA_HOST="+srv.URL)
+	stdin, _ := cmd.StdinPipe()
+	stdout, _ := cmd.StdoutPipe()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	out := bufio.NewReader(stdout)
+	readUntil(t, out, "YOU > ")
+	io.WriteString(stdin, "First\n")
+	readUntil(t, out, "AI > Part")
+	cmd.Process.Signal(syscall.SIGINT)
+	readUntil(t, out, "\nYOU > ") // still running, back at the prompt
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the canceled request's connection stayed open")
+	}
+	io.WriteString(stdin, "Second\n")
+	readUntil(t, out, "AI > Answer\nYOU > ")
+	cmd.Process.Signal(syscall.SIGINT)
+	rest, _ := io.ReadAll(out)
+	if code := exitCode(t, cmd.Wait()); code != 130 || string(rest) != "\nGoodbye.\n" {
+		t.Errorf("code %d, rest %q", code, rest)
+	}
+	if stderr.String() != "\nRequest cancelled. The partial response was not saved.\n" {
+		t.Errorf("stderr %q", stderr.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 || strings.Contains(bodies[1], "First") || strings.Contains(bodies[1], "Part") {
+		t.Errorf("second request %s", bodies[len(bodies)-1])
+	}
+
+	// Only the completed exchange was saved, under the temporary HOME.
+	var state string
+	for _, kv := range cmd.Env {
+		if v, ok := strings.CutPrefix(kv, "XDG_STATE_HOME="); ok {
+			state = v
+		}
+	}
+	files, _ := filepath.Glob(filepath.Join(state, "neurobrau", "conversations", "*.json"))
+	if len(files) != 1 {
+		t.Fatalf("files %v", files)
+	}
+	data, _ := os.ReadFile(files[0])
+	if strings.Contains(string(data), "First") || strings.Count(string(data), `"role"`) != 2 {
+		t.Errorf("saved %s", data)
 	}
 }

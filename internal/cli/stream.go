@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"syscall"
 
 	"github.com/neurobrau/llm-cli-go/internal/chat"
@@ -63,7 +62,7 @@ func streamPrompt(ctx context.Context, provider llm.StreamingProvider, req llm.R
 	case llm.StreamCompleted:
 		if showUsage {
 			fmt.Fprintln(stderr, chat.FormatUsage(t.Response.Usage))
-			if line := formatDuration(t.Response.Timing); line != "" {
+			if line := chat.FormatDuration(t.Response.Timing); line != "" {
 				fmt.Fprintln(stderr, line)
 			}
 		}
@@ -100,24 +99,4 @@ func writeFailed(stderr io.Writer, err error) int {
 	}
 	fmt.Fprintf(stderr, "%s: error: could not write the answer: %v\n", ProgName, err)
 	return llm.ExitCode(&llm.Error{Kind: llm.KindAPI})
-}
-
-// formatDuration is the `Duration: …` line for provider-reported timing
-// (Ollama); "" when the total is not reported.
-func formatDuration(t llm.Timing) string {
-	if t.Total <= 0 {
-		return ""
-	}
-	line := fmt.Sprintf("Duration: %.2f s", t.Total.Seconds())
-	var details []string
-	if t.Load > 0 {
-		details = append(details, fmt.Sprintf("load %.2f s", t.Load.Seconds()))
-	}
-	if t.Eval > 0 {
-		details = append(details, fmt.Sprintf("generation %.2f s", t.Eval.Seconds()))
-	}
-	if len(details) > 0 {
-		line += " (" + strings.Join(details, ", ") + ")"
-	}
-	return line
 }
